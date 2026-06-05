@@ -184,11 +184,7 @@ INTRO
 
   DOMAIN="$(prompt_required "Domain utama" "$DOMAIN")"
 
-  local default_aliases="$ALIASES"
-  if [[ -z "$default_aliases" ]]; then
-    default_aliases="www.${DOMAIN}"
-  fi
-  ALIASES="$(prompt_text "Alias domain, pisahkan dengan koma. Kosongkan jika tidak ada" "$default_aliases")"
+  ALIASES="$(prompt_text "Alias domain, pisahkan dengan koma. Contoh: www.${DOMAIN}. Kosongkan jika tidak ada" "$ALIASES")"
 
   if [[ -z "$SITE_PATH" ]]; then
     SITE_PATH="/var/www/${DOMAIN}"
