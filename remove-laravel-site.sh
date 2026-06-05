@@ -7,12 +7,20 @@ DELETE_DB=false
 DB_NAME=""
 DB_USER=""
 SITE_PATH=""
+INTERACTIVE=false
+
+if (( $# == 0 )); then
+  INTERACTIVE=true
+fi
 
 usage() {
   cat <<'USAGE'
-Usage: sudo bash remove-laravel-site.sh --domain=example.com [options]
+Usage:
+  sudo bash remove-laravel-site.sh
+  sudo bash remove-laravel-site.sh --domain=example.com [options]
 
 Options:
+  --interactive       Ask removal questions
   --delete-files      Delete /var/www/{domain} after explicit confirmation
   --delete-db         Drop database and user after explicit confirmation
   --db-name=name      Required with --delete-db
@@ -28,6 +36,7 @@ for arg in "$@"; do
     --delete-db) DELETE_DB=true ;;
     --db-name=*) DB_NAME="${arg#*=}" ;;
     --db-user=*) DB_USER="${arg#*=}" ;;
+    --interactive) INTERACTIVE=true ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; usage; exit 1 ;;
   esac
@@ -45,6 +54,138 @@ info() { printf '[INFO] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*"; }
 success() { printf '[OK] %s\n' "$*"; }
 error() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+
+is_tty() {
+  [[ -t 0 && -t 1 ]]
+}
+
+prompt_text() {
+  local prompt="$1"
+  local default_value="${2:-}"
+  local value
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s' "${prompt} [${default_value}]: " > /dev/tty
+  else
+    printf '%s' "${prompt}: " > /dev/tty
+  fi
+
+  IFS= read -r value < /dev/tty
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s' "${value:-$default_value}"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+prompt_required() {
+  local prompt="$1"
+  local default_value="${2:-}"
+  local value
+
+  while true; do
+    value="$(prompt_text "$prompt" "$default_value")"
+    if [[ -n "$value" ]]; then
+      printf '%s' "$value"
+      return
+    fi
+    warn "Value is required"
+  done
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local default_value="${2:-n}"
+  local suffix="[y/N]"
+  local answer
+
+  if [[ "$default_value" == "y" ]]; then
+    suffix="[Y/n]"
+  fi
+
+  while true; do
+    printf '%s' "${prompt} ${suffix}: " > /dev/tty
+    IFS= read -r answer < /dev/tty
+    answer="${answer:-$default_value}"
+
+    case "$answer" in
+      y|Y|yes|YES|Yes) return 0 ;;
+      n|N|no|NO|No) return 1 ;;
+      *) warn "Answer y or n" ;;
+    esac
+  done
+}
+
+domain_to_identifier() {
+  local value="$1"
+  value="${value//./_}"
+  value="${value//-/_}"
+  value="${value//[^A-Za-z0-9_]/_}"
+  printf '%s' "$value"
+}
+
+load_db_defaults_from_credentials() {
+  local credential_file="/root/laravel-deploy/credentials/${DOMAIN}.db.env"
+  if [[ ! -f "$credential_file" ]]; then
+    return
+  fi
+
+  if [[ -z "$DB_NAME" ]]; then
+    DB_NAME="$(grep '^DB_NAME=' "$credential_file" | cut -d= -f2- || true)"
+  fi
+
+  if [[ -z "$DB_USER" ]]; then
+    DB_USER="$(grep '^DB_USER=' "$credential_file" | cut -d= -f2- || true)"
+  fi
+}
+
+run_interactive_wizard() {
+  is_tty || error "Interactive mode needs a terminal. Use --domain and options for non-interactive use."
+
+  cat > /dev/tty <<'INTRO'
+Laravel site removal wizard
+Press Enter to accept the value in brackets.
+
+INTRO
+
+  DOMAIN="$(prompt_required "Domain site yang akan dihapus" "$DOMAIN")"
+  load_db_defaults_from_credentials
+
+  if [[ "$DELETE_FILES" != true ]] && prompt_yes_no "Hapus folder project juga?" "n"; then
+    DELETE_FILES=true
+  fi
+
+  if [[ "$DELETE_DB" != true ]] && prompt_yes_no "Hapus database dan user MariaDB juga?" "n"; then
+    DELETE_DB=true
+  fi
+
+  if [[ "$DELETE_DB" == true ]]; then
+    local db_base
+    db_base="$(domain_to_identifier "$DOMAIN")"
+    [[ -n "$DB_NAME" ]] || DB_NAME="${db_base}_db"
+    [[ -n "$DB_USER" ]] || DB_USER="${db_base}_user"
+    DB_NAME="$(prompt_required "Nama database yang akan dihapus" "$DB_NAME")"
+    DB_USER="$(prompt_required "User database yang akan dihapus" "$DB_USER")"
+  fi
+
+  cat > /dev/tty <<EOF
+
+Ringkasan removal:
+  domain:       ${DOMAIN}
+  nginx:        remove config
+  supervisor:   remove ${DOMAIN}-queue jika ada
+  files:        ${DELETE_FILES}
+  database:     ${DELETE_DB}
+  db name:      ${DB_NAME:-"-"}
+  db user:      ${DB_USER:-"-"}
+
+EOF
+
+  if ! prompt_yes_no "Lanjut disable site sekarang?" "n"; then
+    error "Removal cancelled"
+  fi
+}
 
 validate_domain() {
   local value="$1"
@@ -99,8 +240,14 @@ confirm_or_skip() {
   local prompt="$2"
   local answer
 
-  printf '%s\n' "$prompt"
-  read -r answer
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    printf '%s\n' "$prompt" > /dev/tty
+    IFS= read -r answer < /dev/tty
+  else
+    printf '%s\n' "$prompt"
+    IFS= read -r answer
+  fi
+
   [[ "$answer" == "$expected" ]]
 }
 
@@ -145,6 +292,10 @@ SQL
 }
 
 main() {
+  if [[ "$INTERACTIVE" == true ]]; then
+    run_interactive_wizard
+  fi
+
   validate_input
   disable_nginx_site
   remove_supervisor_queue

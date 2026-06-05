@@ -7,12 +7,20 @@ PHP_VERSION="8.3"
 NO_NPM=false
 NO_MIGRATE=false
 NO_OPTIMIZE=false
+INTERACTIVE=false
+
+if (( $# == 0 )); then
+  INTERACTIVE=true
+fi
 
 usage() {
   cat <<'USAGE'
-Usage: sudo bash deploy-laravel.sh --path=/var/www/example.com [options]
+Usage:
+  sudo bash deploy-laravel.sh
+  sudo bash deploy-laravel.sh --path=/var/www/example.com [options]
 
 Options:
+  --interactive
   --branch=main
   --php=8.3
   --no-npm
@@ -30,6 +38,7 @@ for arg in "$@"; do
     --no-npm) NO_NPM=true ;;
     --no-migrate) NO_MIGRATE=true ;;
     --no-optimize) NO_OPTIMIZE=true ;;
+    --interactive) INTERACTIVE=true ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; usage; exit 1 ;;
   esac
@@ -44,20 +53,140 @@ if (( EUID != 0 )); then
 fi
 
 LOG_DIR="/var/log/laravel-deploy"
-DOMAIN="$(basename "${SITE_PATH:-unknown}")"
-DOMAIN="${DOMAIN//[^A-Za-z0-9._-]/-}"
-LOG_FILE="${LOG_DIR}/deploy-${DOMAIN}.log"
-mkdir -p "$LOG_DIR"
-touch "$LOG_FILE"
-chmod 640 "$LOG_FILE"
-exec > >(tee -a "$LOG_FILE") 2>&1
+DOMAIN="unknown"
+LOG_FILE=""
 
 info() { printf '[INFO] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*"; }
 success() { printf '[OK] %s\n' "$*"; }
 error() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 
-trap 'error "Deploy failed at line ${LINENO}. See ${LOG_FILE} for details."' ERR
+setup_logging() {
+  DOMAIN="$(basename "${SITE_PATH:-unknown}")"
+  DOMAIN="${DOMAIN//[^A-Za-z0-9._-]/-}"
+  LOG_FILE="${LOG_DIR}/deploy-${DOMAIN}.log"
+  mkdir -p "$LOG_DIR"
+  touch "$LOG_FILE"
+  chmod 640 "$LOG_FILE"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+  trap 'error "Deploy failed at line ${LINENO}. See ${LOG_FILE} for details."' ERR
+}
+
+is_tty() {
+  [[ -t 0 && -t 1 ]]
+}
+
+prompt_text() {
+  local prompt="$1"
+  local default_value="${2:-}"
+  local value
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s' "${prompt} [${default_value}]: " > /dev/tty
+  else
+    printf '%s' "${prompt}: " > /dev/tty
+  fi
+
+  IFS= read -r value < /dev/tty
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s' "${value:-$default_value}"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+prompt_required() {
+  local prompt="$1"
+  local default_value="${2:-}"
+  local value
+
+  while true; do
+    value="$(prompt_text "$prompt" "$default_value")"
+    if [[ -n "$value" ]]; then
+      printf '%s' "$value"
+      return
+    fi
+    warn "Value is required"
+  done
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local default_value="${2:-n}"
+  local suffix="[y/N]"
+  local answer
+
+  if [[ "$default_value" == "y" ]]; then
+    suffix="[Y/n]"
+  fi
+
+  while true; do
+    printf '%s' "${prompt} ${suffix}: " > /dev/tty
+    IFS= read -r answer < /dev/tty
+    answer="${answer:-$default_value}"
+
+    case "$answer" in
+      y|Y|yes|YES|Yes) return 0 ;;
+      n|N|no|NO|No) return 1 ;;
+      *) warn "Answer y or n" ;;
+    esac
+  done
+}
+
+default_site_path() {
+  local candidate=""
+  if [[ -d /var/www ]]; then
+    candidate="$(find /var/www -mindepth 1 -maxdepth 1 -type d | sort | head -n 1 || true)"
+  fi
+  printf '%s' "$candidate"
+}
+
+run_interactive_wizard() {
+  is_tty || error "Interactive mode needs a terminal. Use --path and options for non-interactive use."
+
+  cat > /dev/tty <<'INTRO'
+Laravel deploy wizard
+Press Enter to accept the value in brackets.
+
+INTRO
+
+  if [[ -z "$SITE_PATH" ]]; then
+    SITE_PATH="$(default_site_path)"
+  fi
+
+  SITE_PATH="$(prompt_required "Path project Laravel" "$SITE_PATH")"
+  BRANCH="$(prompt_required "Branch Git" "$BRANCH")"
+  PHP_VERSION="$(prompt_required "Versi PHP-FPM" "$PHP_VERSION")"
+
+  if [[ "$NO_NPM" != true ]] && ! prompt_yes_no "Jalankan npm ci dan npm run build jika package.json ada?" "y"; then
+    NO_NPM=true
+  fi
+
+  if [[ "$NO_MIGRATE" != true ]] && ! prompt_yes_no "Jalankan php artisan migrate --force?" "y"; then
+    NO_MIGRATE=true
+  fi
+
+  if [[ "$NO_OPTIMIZE" != true ]] && ! prompt_yes_no "Rebuild cache Laravel production?" "y"; then
+    NO_OPTIMIZE=true
+  fi
+
+  cat > /dev/tty <<EOF
+
+Ringkasan deploy:
+  path:       ${SITE_PATH}
+  branch:     ${BRANCH}
+  PHP:        ${PHP_VERSION}
+  npm build:  $([[ "$NO_NPM" == true ]] && echo "skip" || echo "run")
+  migrate:    $([[ "$NO_MIGRATE" == true ]] && echo "skip" || echo "run")
+  optimize:   $([[ "$NO_OPTIMIZE" == true ]] && echo "skip" || echo "run")
+
+EOF
+
+  if ! prompt_yes_no "Lanjut deploy sekarang?" "y"; then
+    error "Deploy cancelled"
+  fi
+}
 
 validate_input() {
   [[ -n "$SITE_PATH" ]] || error "--path is required"
@@ -184,6 +313,11 @@ restart_services() {
 }
 
 main() {
+  if [[ "$INTERACTIVE" == true ]]; then
+    run_interactive_wizard
+  fi
+
+  setup_logging
   validate_input
   cd "$SITE_PATH"
 

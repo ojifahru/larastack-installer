@@ -5,12 +5,22 @@ DEFAULT_TIMEZONE="${DEFAULT_TIMEZONE:-Asia/Jakarta}"
 PHP_DEFAULT_VERSION="8.3"
 INSTALL_PHP84=false
 INSTALL_FAIL2BAN=false
+INTERACTIVE=false
+ASSUME_YES=false
+
+if (( $# == 0 )); then
+  INTERACTIVE=true
+fi
 
 usage() {
   cat <<'USAGE'
-Usage: sudo bash install-laravel-server.sh [options]
+Usage:
+  sudo bash install-laravel-server.sh
+  sudo bash install-laravel-server.sh --yes [options]
 
 Options:
+  --interactive           Ask installation questions
+  --yes                   Run with defaults and supplied options without questions
   --timezone=Asia/Jakarta  Set server timezone. Default: Asia/Jakarta
   --with-php84             Install PHP 8.4 if it is available from configured apt repositories
   --with-fail2ban          Install and enable Fail2ban
@@ -23,6 +33,8 @@ for arg in "$@"; do
     --timezone=*) DEFAULT_TIMEZONE="${arg#*=}" ;;
     --with-php84) INSTALL_PHP84=true ;;
     --with-fail2ban) INSTALL_FAIL2BAN=true ;;
+    --interactive) INTERACTIVE=true ;;
+    --yes) ASSUME_YES=true; INTERACTIVE=false ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; usage; exit 1 ;;
   esac
@@ -81,6 +93,89 @@ write_file_if_changed() {
   install -m "$mode" "$tmp" "$target"
   rm -f "$tmp"
   success "Wrote $target"
+}
+
+is_tty() {
+  [[ -t 0 && -t 1 ]]
+}
+
+prompt_text() {
+  local prompt="$1"
+  local default_value="${2:-}"
+  local value
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s' "${prompt} [${default_value}]: " > /dev/tty
+  else
+    printf '%s' "${prompt}: " > /dev/tty
+  fi
+
+  IFS= read -r value < /dev/tty
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s' "${value:-$default_value}"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local default_value="${2:-n}"
+  local suffix="[y/N]"
+  local answer
+
+  if [[ "$default_value" == "y" ]]; then
+    suffix="[Y/n]"
+  fi
+
+  while true; do
+    printf '%s' "${prompt} ${suffix}: " > /dev/tty
+    IFS= read -r answer < /dev/tty
+    answer="${answer:-$default_value}"
+
+    case "$answer" in
+      y|Y|yes|YES|Yes) return 0 ;;
+      n|N|no|NO|No) return 1 ;;
+      *) warn "Answer y or n" ;;
+    esac
+  done
+}
+
+run_interactive_wizard() {
+  is_tty || error "Interactive mode needs a terminal. Use --yes and options for non-interactive use."
+
+  cat > /dev/tty <<'INTRO'
+Laravel server install wizard
+Press Enter to accept the value in brackets.
+
+INTRO
+
+  DEFAULT_TIMEZONE="$(prompt_text "Timezone server" "$DEFAULT_TIMEZONE")"
+
+  if [[ "$INSTALL_PHP84" != true ]] && prompt_yes_no "Install PHP 8.4 juga jika tersedia dari apt repository?" "n"; then
+    INSTALL_PHP84=true
+  fi
+
+  if [[ "$INSTALL_FAIL2BAN" != true ]] && prompt_yes_no "Install dan aktifkan Fail2ban?" "y"; then
+    INSTALL_FAIL2BAN=true
+  fi
+
+  cat > /dev/tty <<EOF
+
+Ringkasan install:
+  OS target:     Ubuntu 24.04
+  timezone:      ${DEFAULT_TIMEZONE}
+  PHP default:   ${PHP_DEFAULT_VERSION}
+  PHP 8.4:       ${INSTALL_PHP84}
+  Fail2ban:      ${INSTALL_FAIL2BAN}
+  log:           ${LOG_FILE}
+
+EOF
+
+  if ! prompt_yes_no "Lanjut install stack production Laravel sekarang?" "y"; then
+    error "Installation cancelled"
+  fi
 }
 
 apt_install() {
@@ -393,6 +488,10 @@ HEADER
 
 main() {
   info "Laravel production server installation started"
+  if [[ "$INTERACTIVE" == true ]]; then
+    run_interactive_wizard
+  fi
+
   check_os
   set_timezone
   install_base_packages

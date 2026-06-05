@@ -12,12 +12,20 @@ DB_PASS=""
 WITH_SSL=false
 WITH_QUEUE=false
 EMAIL=""
+INTERACTIVE=false
+
+if (( $# == 0 )); then
+  INTERACTIVE=true
+fi
 
 usage() {
   cat <<'USAGE'
-Usage: sudo bash create-laravel-site.sh --domain=example.com [options]
+Usage:
+  sudo bash create-laravel-site.sh
+  sudo bash create-laravel-site.sh --domain=example.com [options]
 
 Options:
+  --interactive
   --aliases=www.example.com,sub.example.com
   --path=/var/www/example.com
   --php=8.3
@@ -45,6 +53,7 @@ for arg in "$@"; do
     --with-ssl) WITH_SSL=true ;;
     --email=*) EMAIL="${arg#*=}" ;;
     --with-queue) WITH_QUEUE=true ;;
+    --interactive) INTERACTIVE=true ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; usage; exit 1 ;;
   esac
@@ -92,6 +101,152 @@ write_file_if_changed() {
   install -m "$mode" "$tmp" "$target"
   rm -f "$tmp"
   success "Wrote $target"
+}
+
+is_tty() {
+  [[ -t 0 && -t 1 ]]
+}
+
+prompt_text() {
+  local prompt="$1"
+  local default_value="${2:-}"
+  local value
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s' "${prompt} [${default_value}]: " > /dev/tty
+  else
+    printf '%s' "${prompt}: " > /dev/tty
+  fi
+
+  IFS= read -r value < /dev/tty
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s' "${value:-$default_value}"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+prompt_required() {
+  local prompt="$1"
+  local default_value="${2:-}"
+  local value
+
+  while true; do
+    value="$(prompt_text "$prompt" "$default_value")"
+    if [[ -n "$value" ]]; then
+      printf '%s' "$value"
+      return
+    fi
+    warn "Value is required"
+  done
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local default_value="${2:-n}"
+  local suffix="[y/N]"
+  local answer
+
+  if [[ "$default_value" == "y" ]]; then
+    suffix="[Y/n]"
+  fi
+
+  while true; do
+    printf '%s' "${prompt} ${suffix}: " > /dev/tty
+    IFS= read -r answer < /dev/tty
+    answer="${answer:-$default_value}"
+
+    case "$answer" in
+      y|Y|yes|YES|Yes) return 0 ;;
+      n|N|no|NO|No) return 1 ;;
+      *) warn "Answer y or n" ;;
+    esac
+  done
+}
+
+domain_to_identifier() {
+  local value="$1"
+  value="${value//./_}"
+  value="${value//-/_}"
+  value="${value//[^A-Za-z0-9_]/_}"
+  printf '%s' "$value"
+}
+
+run_interactive_wizard() {
+  is_tty || error "Interactive mode needs a terminal. Use --domain and other options for non-interactive use."
+
+  cat > /dev/tty <<'INTRO'
+Laravel site wizard
+Press Enter to accept the value in brackets.
+
+INTRO
+
+  DOMAIN="$(prompt_required "Domain utama" "$DOMAIN")"
+
+  local default_aliases="$ALIASES"
+  if [[ -z "$default_aliases" ]]; then
+    default_aliases="www.${DOMAIN}"
+  fi
+  ALIASES="$(prompt_text "Alias domain, pisahkan dengan koma. Kosongkan jika tidak ada" "$default_aliases")"
+
+  if [[ -z "$SITE_PATH" ]]; then
+    SITE_PATH="/var/www/${DOMAIN}"
+  fi
+  SITE_PATH="$(prompt_required "Path project" "$SITE_PATH")"
+
+  PHP_VERSION="$(prompt_required "Versi PHP-FPM" "$PHP_VERSION")"
+  REPO="$(prompt_text "Git repository URL. Kosongkan jika belum ada repo" "$REPO")"
+
+  local wants_db=false
+  if [[ -n "$DB_NAME" || -n "$DB_USER" || -n "$DB_PASS" ]]; then
+    wants_db=true
+  elif prompt_yes_no "Buat database MariaDB untuk site ini?" "y"; then
+    wants_db=true
+  fi
+
+  if [[ "$wants_db" == true ]]; then
+    local db_base
+    db_base="$(domain_to_identifier "$DOMAIN")"
+    [[ -n "$DB_NAME" ]] || DB_NAME="${db_base}_db"
+    [[ -n "$DB_USER" ]] || DB_USER="${db_base}_user"
+    [[ -n "$DB_PASS" ]] || DB_PASS="random"
+
+    DB_NAME="$(prompt_required "Nama database" "$DB_NAME")"
+    DB_USER="$(prompt_required "User database" "$DB_USER")"
+    DB_PASS="$(prompt_required "Password database. Gunakan random untuk generate otomatis" "$DB_PASS")"
+  fi
+
+  if [[ "$WITH_SSL" != true ]] && prompt_yes_no "Aktifkan SSL Let's Encrypt sekarang?" "n"; then
+    WITH_SSL=true
+  fi
+
+  if [[ "$WITH_SSL" == true ]]; then
+    EMAIL="$(prompt_text "Email Let's Encrypt. Kosongkan untuk tanpa email" "$EMAIL")"
+  fi
+
+  if [[ "$WITH_QUEUE" != true ]] && prompt_yes_no "Buat Supervisor queue worker?" "n"; then
+    WITH_QUEUE=true
+  fi
+
+  cat > /dev/tty <<EOF
+
+Ringkasan site:
+  domain:       ${DOMAIN}
+  aliases:      ${ALIASES:-"-"}
+  path:         ${SITE_PATH}
+  PHP:          ${PHP_VERSION}
+  repo:         ${REPO:-"-"}
+  database:     ${DB_NAME:-"-"}
+  db user:      ${DB_USER:-"-"}
+  SSL:          ${WITH_SSL}
+  queue:        ${WITH_QUEUE}
+
+EOF
+
+  if ! prompt_yes_no "Lanjut buat/update site sekarang?" "y"; then
+    error "Site creation cancelled"
+  fi
 }
 
 validate_domain() {
@@ -344,6 +499,10 @@ EOF
 }
 
 main() {
+  if [[ "$INTERACTIVE" == true ]]; then
+    run_interactive_wizard
+  fi
+
   validate_input
   create_project_path
   create_database

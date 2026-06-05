@@ -29,24 +29,34 @@ Jadikan script executable:
 chmod +x *.sh
 ```
 
+Semua script utama mendukung mode interaktif. Jalankan tanpa argumen untuk mode tanya-jawab, atau isi argumen jika ingin automation.
+
 ## Instalasi Awal Server
 
-Jalankan di Ubuntu 24.04 baru:
+Mode interaktif di Ubuntu 24.04 baru:
 
 ```bash
 sudo ./install-laravel-server.sh
 ```
 
+Script akan menanyakan timezone, opsi PHP 8.4, opsi Fail2ban, dan konfirmasi sebelum install berjalan.
+
+Mode otomatis dengan default:
+
+```bash
+sudo ./install-laravel-server.sh --yes
+```
+
 Dengan Fail2ban:
 
 ```bash
-sudo ./install-laravel-server.sh --with-fail2ban
+sudo ./install-laravel-server.sh --yes --with-fail2ban
 ```
 
 Dengan percobaan PHP 8.4 dari apt repository yang sudah tersedia:
 
 ```bash
-sudo ./install-laravel-server.sh --with-php84
+sudo ./install-laravel-server.sh --yes --with-php84
 ```
 
 Script akan menulis log ke:
@@ -56,6 +66,25 @@ Script akan menulis log ke:
 ```
 
 ## Membuat Website Laravel Baru
+
+Mode interaktif:
+
+```bash
+sudo ./create-laravel-site.sh
+```
+
+Script akan menanyakan:
+
+- domain utama
+- alias domain
+- path project
+- versi PHP-FPM
+- URL repository Git
+- database MariaDB
+- SSL Let's Encrypt
+- Supervisor queue worker
+
+Mode argumen tetap tersedia untuk automation atau deploy berulang.
 
 Tanpa repository:
 
@@ -147,6 +176,12 @@ sudo ./create-laravel-site.sh \
 Atau buat queue terpisah:
 
 ```bash
+sudo ./create-supervisor-laravel-queue.sh
+```
+
+Mode argumen:
+
+```bash
 sudo ./create-supervisor-laravel-queue.sh \
   --name=example.com \
   --path=/var/www/example.com \
@@ -182,6 +217,12 @@ sudo chmod -R 775 storage bootstrap/cache
 ```
 
 Deploy berikutnya:
+
+```bash
+sudo ./deploy-laravel.sh
+```
+
+Mode argumen:
 
 ```bash
 sudo ./deploy-laravel.sh \
@@ -292,6 +333,12 @@ gunzip -c /root/backups/mysql/example_db-YYYY-MM-DD-HHMMSS.sql.gz | sudo mysql e
 ```
 
 ## Menghapus Site
+
+Mode interaktif:
+
+```bash
+sudo ./remove-laravel-site.sh
+```
 
 Hapus config Nginx dan Supervisor saja:
 

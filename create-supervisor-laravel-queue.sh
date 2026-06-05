@@ -6,12 +6,20 @@ SITE_PATH=""
 PHP_VERSION="8.3"
 RUN_USER="www-data"
 WORKERS="1"
+INTERACTIVE=false
+
+if (( $# == 0 )); then
+  INTERACTIVE=true
+fi
 
 usage() {
   cat <<'USAGE'
-Usage: sudo bash create-supervisor-laravel-queue.sh --name=example.com --path=/var/www/example.com [options]
+Usage:
+  sudo bash create-supervisor-laravel-queue.sh
+  sudo bash create-supervisor-laravel-queue.sh --name=example.com --path=/var/www/example.com [options]
 
 Options:
+  --interactive    Ask queue setup questions
   --php=8.3         PHP version. Default: 8.3
   --user=www-data   Linux user for queue worker. Default: www-data
   --workers=1       Number of queue workers. Default: 1
@@ -26,6 +34,7 @@ for arg in "$@"; do
     --php=*) PHP_VERSION="${arg#*=}" ;;
     --user=*) RUN_USER="${arg#*=}" ;;
     --workers=*) WORKERS="${arg#*=}" ;;
+    --interactive) INTERACTIVE=true ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; usage; exit 1 ;;
   esac
@@ -75,6 +84,116 @@ write_file_if_changed() {
   success "Wrote $target"
 }
 
+is_tty() {
+  [[ -t 0 && -t 1 ]]
+}
+
+prompt_text() {
+  local prompt="$1"
+  local default_value="${2:-}"
+  local value
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s' "${prompt} [${default_value}]: " > /dev/tty
+  else
+    printf '%s' "${prompt}: " > /dev/tty
+  fi
+
+  IFS= read -r value < /dev/tty
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s' "${value:-$default_value}"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+prompt_required() {
+  local prompt="$1"
+  local default_value="${2:-}"
+  local value
+
+  while true; do
+    value="$(prompt_text "$prompt" "$default_value")"
+    if [[ -n "$value" ]]; then
+      printf '%s' "$value"
+      return
+    fi
+    warn "Value is required"
+  done
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local default_value="${2:-n}"
+  local suffix="[y/N]"
+  local answer
+
+  if [[ "$default_value" == "y" ]]; then
+    suffix="[Y/n]"
+  fi
+
+  while true; do
+    printf '%s' "${prompt} ${suffix}: " > /dev/tty
+    IFS= read -r answer < /dev/tty
+    answer="${answer:-$default_value}"
+
+    case "$answer" in
+      y|Y|yes|YES|Yes) return 0 ;;
+      n|N|no|NO|No) return 1 ;;
+      *) warn "Answer y or n" ;;
+    esac
+  done
+}
+
+default_site_path() {
+  local candidate=""
+  if [[ -d /var/www ]]; then
+    candidate="$(find /var/www -mindepth 1 -maxdepth 1 -type d | sort | head -n 1 || true)"
+  fi
+  printf '%s' "$candidate"
+}
+
+run_interactive_wizard() {
+  is_tty || error "Interactive mode needs a terminal. Use --name, --path, and options for non-interactive use."
+
+  cat > /dev/tty <<'INTRO'
+Laravel queue wizard
+Press Enter to accept the value in brackets.
+
+INTRO
+
+  if [[ -z "$SITE_PATH" ]]; then
+    SITE_PATH="$(default_site_path)"
+  fi
+
+  SITE_PATH="$(prompt_required "Path project Laravel" "$SITE_PATH")"
+
+  if [[ -z "$NAME" ]]; then
+    NAME="$(basename "$SITE_PATH")"
+  fi
+
+  NAME="$(prompt_required "Nama queue/site" "$NAME")"
+  PHP_VERSION="$(prompt_required "Versi PHP" "$PHP_VERSION")"
+  RUN_USER="$(prompt_required "User Linux untuk worker" "$RUN_USER")"
+  WORKERS="$(prompt_required "Jumlah worker" "$WORKERS")"
+
+  cat > /dev/tty <<EOF
+
+Ringkasan queue:
+  name:     ${NAME}
+  path:     ${SITE_PATH}
+  PHP:      ${PHP_VERSION}
+  user:     ${RUN_USER}
+  workers:  ${WORKERS}
+
+EOF
+
+  if ! prompt_yes_no "Lanjut buat/update Supervisor queue?" "y"; then
+    error "Queue setup cancelled"
+  fi
+}
+
 validate_input() {
   [[ -n "$NAME" ]] || error "--name is required"
   [[ -n "$SITE_PATH" ]] || error "--path is required"
@@ -88,6 +207,10 @@ validate_input() {
 }
 
 main() {
+  if [[ "$INTERACTIVE" == true ]]; then
+    run_interactive_wizard
+  fi
+
   validate_input
 
   local php_bin="/usr/bin/php${PHP_VERSION}"
