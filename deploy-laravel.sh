@@ -73,7 +73,7 @@ setup_logging() {
 }
 
 is_tty() {
-  [[ -t 0 && -t 1 ]]
+  [[ -r /dev/tty && -w /dev/tty ]]
 }
 
 prompt_text() {

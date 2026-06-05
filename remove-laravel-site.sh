@@ -56,7 +56,7 @@ success() { printf '[OK] %s\n' "$*"; }
 error() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 
 is_tty() {
-  [[ -t 0 && -t 1 ]]
+  [[ -r /dev/tty && -w /dev/tty ]]
 }
 
 prompt_text() {
