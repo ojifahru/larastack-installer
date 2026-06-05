@@ -215,9 +215,8 @@ main() {
 
   local php_bin="/usr/bin/php${PHP_VERSION}"
   if [[ ! -x "$php_bin" ]]; then
-    php_bin="$(command -v php || true)"
+    error "PHP binary not found: $php_bin. Install PHP ${PHP_VERSION} first."
   fi
-  [[ -n "$php_bin" && -x "$php_bin" ]] || error "PHP binary not found for version ${PHP_VERSION}"
 
   local program_name="${NAME}-queue"
   local conf_file="/etc/supervisor/conf.d/${program_name}.conf"

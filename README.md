@@ -12,8 +12,9 @@ Paket ini menyiapkan stack Laravel production tanpa aaPanel untuk Ubuntu 24.04:
 - Node.js 24 dari NodeSource apt repository
 - Certbot untuk Let's Encrypt
 - UFW firewall
-- struktur multi-website di `/var/www`
-- user web default `www-data`
+- struktur multi-website per Linux user di `/home/{site_user}/public_html`
+- PHP-FPM pool terpisah per website
+- Git, Composer, NPM, dan Artisan dijalankan sebagai user website
 
 ## File Script
 
@@ -59,6 +60,12 @@ Dengan percobaan PHP 8.4 dari apt repository yang sudah tersedia:
 sudo ./install-laravel-server.sh --yes --with-php84
 ```
 
+Jika project butuh PHP 8.4 dan paket `php8.4-fpm` belum tersedia dari repository Ubuntu yang aktif, izinkan script menambahkan PPA `ppa:ondrej/php`:
+
+```bash
+sudo ./install-laravel-server.sh --yes --with-php84 --with-php84-ppa
+```
+
 Script akan menulis log ke:
 
 ```bash
@@ -76,6 +83,9 @@ sudo ./create-laravel-site.sh
 Script akan menanyakan:
 
 - domain utama
+- Linux site user
+- private/public repository
+- SSH deploy key untuk private repository
 - alias domain
 - path project
 - versi PHP-FPM
@@ -90,7 +100,8 @@ Tanpa repository:
 
 ```bash
 sudo ./create-laravel-site.sh \
-  --domain=example.com
+  --domain=example.com \
+  --site-user=example
 ```
 
 Dengan alias:
@@ -98,28 +109,79 @@ Dengan alias:
 ```bash
 sudo ./create-laravel-site.sh \
   --domain=example.com \
+  --site-user=example \
   --aliases=www.example.com
 ```
 
-Dengan clone dari GitHub:
+Dengan public repository:
 
 ```bash
 sudo ./create-laravel-site.sh \
   --domain=example.com \
+  --site-user=example \
   --repo=https://github.com/user/repo.git
+```
+
+Dengan private repository:
+
+```bash
+sudo ./create-laravel-site.sh \
+  --domain=example.com \
+  --site-user=example \
+  --private-repo \
+  --repo=git@github.com:user/repo.git
 ```
 
 Path default:
 
 ```bash
-/var/www/example.com
+/home/example/public_html
 ```
 
 Root Nginx akan diarahkan ke:
 
 ```bash
-/var/www/example.com/public
+/home/example/public_html/public
 ```
+
+Setiap site dibuat dengan:
+
+- Linux user sendiri, contoh `example`
+- home directory sendiri, contoh `/home/example`
+- project path `/home/example/public_html`
+- PHP-FPM pool sendiri, contoh `/etc/php/8.3/fpm/pool.d/example.conf`
+- socket sendiri, contoh `/run/php/php8.3-fpm-example.sock`
+- owner project `example:example`
+
+### Public Repo
+
+1. Jalankan:
+   ```bash
+   sudo bash create-laravel-site.sh --interactive
+   ```
+2. Pilih repository public.
+3. Masukkan URL HTTPS atau SSH.
+4. Script clone repo dan menjalankan Composer/NPM/Artisan sebagai site user.
+
+### Private Repo
+
+1. Jalankan:
+   ```bash
+   sudo bash create-laravel-site.sh --interactive
+   ```
+2. Pilih private repo.
+3. Script membuat Linux user dan SSH key.
+4. Copy public key yang ditampilkan.
+5. Masuk GitHub repo: Settings -> Deploy keys -> Add deploy key.
+6. Paste public key.
+7. Jangan centang write access kecuali butuh push.
+8. Kembali ke terminal.
+9. Konfirmasi.
+10. Masukkan repo SSH:
+    ```bash
+    git@github.com:username/repo.git
+    ```
+11. Script clone repo sebagai site user dan lanjut setup.
 
 ## Membuat Database
 
@@ -128,6 +190,7 @@ Contoh membuat site sekaligus database:
 ```bash
 sudo ./create-laravel-site.sh \
   --domain=example.com \
+  --site-user=example \
   --repo=https://github.com/user/repo.git \
   --db-name=example_db \
   --db-user=example_user \
@@ -149,6 +212,7 @@ Pastikan DNS domain sudah mengarah ke IP server, lalu:
 ```bash
 sudo ./create-laravel-site.sh \
   --domain=example.com \
+  --site-user=example \
   --aliases=www.example.com \
   --with-ssl \
   --email=admin@example.com
@@ -169,6 +233,7 @@ Saat membuat site:
 ```bash
 sudo ./create-laravel-site.sh \
   --domain=example.com \
+  --site-user=example \
   --repo=https://github.com/user/repo.git \
   --with-queue
 ```
@@ -184,8 +249,9 @@ Mode argumen:
 ```bash
 sudo ./create-supervisor-laravel-queue.sh \
   --name=example.com \
-  --path=/var/www/example.com \
+  --path=/home/example/public_html \
   --php=8.3 \
+  --user=example \
   --workers=1
 ```
 
@@ -200,19 +266,19 @@ php artisan queue:work redis --sleep=3 --tries=3 --timeout=120
 Contoh setup manual pertama kali setelah project di-clone:
 
 ```bash
-cd /var/www/example.com
-composer install --no-dev --optimize-autoloader
-cp .env.example .env
-php artisan key:generate
+cd /home/example/public_html
+sudo -H -u example php8.3 /usr/local/bin/composer install --no-dev --optimize-autoloader
+sudo -H -u example cp .env.example .env
+sudo -H -u example php8.3 artisan key:generate
 nano .env
-php artisan migrate --force
-npm ci
-npm run build
-php artisan storage:link
-php artisan config:cache
-php artisan route:cache
-php artisan view:cache
-sudo chown -R www-data:www-data storage bootstrap/cache
+sudo -H -u example php8.3 artisan migrate --force
+sudo -H -u example npm ci
+sudo -H -u example npm run build
+sudo -H -u example php8.3 artisan storage:link
+sudo -H -u example php8.3 artisan config:cache
+sudo -H -u example php8.3 artisan route:cache
+sudo -H -u example php8.3 artisan view:cache
+sudo chown -R example:example /home/example/public_html
 sudo chmod -R 775 storage bootstrap/cache
 ```
 
@@ -226,26 +292,35 @@ Mode argumen:
 
 ```bash
 sudo ./deploy-laravel.sh \
-  --path=/var/www/example.com \
+  --path=/home/example/public_html \
   --branch=main
+```
+
+Deploy memakai PHP tertentu:
+
+```bash
+sudo ./deploy-laravel.sh \
+  --path=/home/example/public_html \
+  --branch=main \
+  --php=8.4
 ```
 
 Skip npm build:
 
 ```bash
-sudo ./deploy-laravel.sh --path=/var/www/example.com --no-npm
+sudo ./deploy-laravel.sh --path=/home/example/public_html --no-npm
 ```
 
 Skip migration:
 
 ```bash
-sudo ./deploy-laravel.sh --path=/var/www/example.com --no-migrate
+sudo ./deploy-laravel.sh --path=/home/example/public_html --no-migrate
 ```
 
 Skip cache optimization:
 
 ```bash
-sudo ./deploy-laravel.sh --path=/var/www/example.com --no-optimize
+sudo ./deploy-laravel.sh --path=/home/example/public_html --no-optimize
 ```
 
 Log deploy disimpan di:
@@ -272,7 +347,7 @@ sudo journalctl -u php8.3-fpm -f
 Laravel:
 
 ```bash
-sudo tail -f /var/www/example.com/storage/logs/laravel.log
+sudo tail -f /home/example/public_html/storage/logs/laravel.log
 ```
 
 Supervisor:
@@ -360,6 +435,30 @@ sudo ./remove-laravel-site.sh \
   --delete-db \
   --db-name=example_db \
   --db-user=example_user
+```
+
+## Troubleshooting
+
+Git menolak repo dengan pesan `detected dubious ownership`:
+
+```bash
+sudo git config --global --add safe.directory /home/example/public_html
+git config --global --add safe.directory /home/example/public_html
+```
+
+Pada workflow baru, `create-laravel-site.sh` menjalankan `git clone` sebagai site user sehingga normalnya tidak perlu `safe.directory`.
+
+Composer gagal karena package butuh PHP 8.4:
+
+```bash
+sudo ./install-laravel-server.sh --yes --with-php84 --with-php84-ppa
+sudo ./deploy-laravel.sh --path=/home/example/public_html --branch=main --php=8.4
+```
+
+Pastikan Nginx site juga memakai PHP-FPM yang sama:
+
+```bash
+sudo ./create-laravel-site.sh --domain=example.com --site-user=example --path=/home/example/public_html --php=8.4
 ```
 
 ## Catatan Production

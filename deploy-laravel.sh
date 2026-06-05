@@ -142,6 +142,16 @@ default_site_path() {
   printf '%s' "$candidate"
 }
 
+composer_lock_requires_php84() {
+  local lock_file="${SITE_PATH}/composer.lock"
+  [[ -f "$lock_file" ]] || return 1
+  grep -Eq '"php"[[:space:]]*:[[:space:]]*"[^"]*(\^8\.4|>=8\.4|~8\.4|8\.4\.[0-9])' "$lock_file"
+}
+
+php_version_less_than_84() {
+  [[ "$PHP_VERSION" =~ ^([0-7]\.|8\.[0-3]$|8\.[0-3]\.) ]]
+}
+
 run_interactive_wizard() {
   is_tty || error "Interactive mode needs a terminal. Use --path and options for non-interactive use."
 
@@ -157,6 +167,12 @@ INTRO
 
   SITE_PATH="$(prompt_required "Path project Laravel" "$SITE_PATH")"
   BRANCH="$(prompt_required "Branch Git" "$BRANCH")"
+
+  if composer_lock_requires_php84 && php_version_less_than_84; then
+    warn "composer.lock terlihat membutuhkan PHP 8.4+. Default deploy diubah ke PHP 8.4."
+    PHP_VERSION="8.4"
+  fi
+
   PHP_VERSION="$(prompt_required "Versi PHP-FPM" "$PHP_VERSION")"
 
   if [[ "$NO_NPM" != true ]] && ! prompt_yes_no "Jalankan npm ci dan npm run build jika package.json ada?" "y"; then
@@ -195,20 +211,44 @@ validate_input() {
   [[ -d "${SITE_PATH}/.git" ]] || error "$SITE_PATH is not a git repository"
   [[ -f "${SITE_PATH}/artisan" ]] || error "$SITE_PATH does not look like a Laravel project: artisan not found"
   [[ "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] || error "--php must look like 8.3"
+  php_bin >/dev/null
+
+  if composer_lock_requires_php84 && php_version_less_than_84; then
+    error "composer.lock contains packages that require PHP 8.4+. Re-run with --php=8.4 after installing PHP 8.4."
+  fi
 }
 
 php_bin() {
   if command -v "php${PHP_VERSION}" >/dev/null 2>&1; then
     command -v "php${PHP_VERSION}"
-  else
-    command -v php
+    return
   fi
+
+  error "PHP binary php${PHP_VERSION} not found. Install it first, then re-run with --php=${PHP_VERSION}."
 }
 
 artisan() {
   local php
   php="$(php_bin)"
   "$php" artisan "$@"
+}
+
+configure_git_safe_directory() {
+  if git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$SITE_PATH"; then
+    success "Git safe.directory already configured for $SITE_PATH"
+  else
+    info "Adding Git safe.directory for $SITE_PATH"
+    git config --global --add safe.directory "$SITE_PATH"
+  fi
+
+  if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]] && id "$SUDO_USER" >/dev/null 2>&1; then
+    if sudo -H -u "$SUDO_USER" git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$SITE_PATH"; then
+      success "Git safe.directory already configured for user $SUDO_USER"
+    else
+      info "Adding Git safe.directory for user $SUDO_USER"
+      sudo -H -u "$SUDO_USER" git config --global --add safe.directory "$SITE_PATH"
+    fi
+  fi
 }
 
 git_update() {
@@ -219,8 +259,15 @@ git_update() {
 }
 
 composer_install() {
+  local php composer_bin php_version
+  php="$(php_bin)"
+  composer_bin="$(command -v composer || true)"
+  [[ -n "$composer_bin" ]] || error "Composer not found. Run install-laravel-server.sh first."
+  php_version="$("$php" -r 'echo PHP_VERSION;')"
+
   info "Installing Composer dependencies"
-  COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction
+  info "Using PHP ${php_version} at ${php}"
+  COMPOSER_ALLOW_SUPERUSER=1 "$php" "$composer_bin" install --no-dev --optimize-autoloader --no-interaction
 }
 
 npm_build() {
@@ -322,6 +369,7 @@ main() {
   cd "$SITE_PATH"
 
   info "Deploy started for $SITE_PATH"
+  configure_git_safe_directory
   git_update
   composer_install
   npm_build

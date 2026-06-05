@@ -4,6 +4,7 @@ set -euo pipefail
 DEFAULT_TIMEZONE="${DEFAULT_TIMEZONE:-Asia/Jakarta}"
 PHP_DEFAULT_VERSION="8.3"
 INSTALL_PHP84=false
+INSTALL_PHP84_PPA=false
 INSTALL_FAIL2BAN=false
 INTERACTIVE=false
 ASSUME_YES=false
@@ -23,6 +24,7 @@ Options:
   --yes                   Run with defaults and supplied options without questions
   --timezone=Asia/Jakarta  Set server timezone. Default: Asia/Jakarta
   --with-php84             Install PHP 8.4 if it is available from configured apt repositories
+  --with-php84-ppa         Add ppa:ondrej/php if PHP 8.4 is not available
   --with-fail2ban          Install and enable Fail2ban
   -h, --help               Show this help
 USAGE
@@ -32,6 +34,7 @@ for arg in "$@"; do
   case "$arg" in
     --timezone=*) DEFAULT_TIMEZONE="${arg#*=}" ;;
     --with-php84) INSTALL_PHP84=true ;;
+    --with-php84-ppa) INSTALL_PHP84=true; INSTALL_PHP84_PPA=true ;;
     --with-fail2ban) INSTALL_FAIL2BAN=true ;;
     --interactive) INTERACTIVE=true ;;
     --yes) ASSUME_YES=true; INTERACTIVE=false ;;
@@ -157,6 +160,11 @@ INTRO
     INSTALL_PHP84=true
   fi
 
+  if [[ "$INSTALL_PHP84" == true && "$INSTALL_PHP84_PPA" != true ]] \
+    && prompt_yes_no "Jika PHP 8.4 tidak ada di repo Ubuntu, tambah PPA ppa:ondrej/php?" "n"; then
+    INSTALL_PHP84_PPA=true
+  fi
+
   if [[ "$INSTALL_FAIL2BAN" != true ]] && prompt_yes_no "Install dan aktifkan Fail2ban?" "y"; then
     INSTALL_FAIL2BAN=true
   fi
@@ -168,6 +176,7 @@ Ringkasan install:
   timezone:      ${DEFAULT_TIMEZONE}
   PHP default:   ${PHP_DEFAULT_VERSION}
   PHP 8.4:       ${INSTALL_PHP84}
+  PHP 8.4 PPA:   ${INSTALL_PHP84_PPA}
   Fail2ban:      ${INSTALL_FAIL2BAN}
   log:           ${LOG_FILE}
 
@@ -254,7 +263,9 @@ install_php_packages() {
   )
 
   info "Installing PHP ${version} packages"
-  apt_install php-fpm php-cli php-common
+  if [[ "$version" == "$PHP_DEFAULT_VERSION" ]]; then
+    apt_install php-fpm php-cli php-common
+  fi
   apt_install "${packages[@]}"
 
   for extension in redis imagick; do
@@ -266,6 +277,17 @@ install_php_packages() {
   done
 }
 
+add_ondrej_php_ppa() {
+  if grep -Rqs "ppa.launchpadcontent.net/ondrej/php" /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
+    success "ppa:ondrej/php is already configured"
+    return
+  fi
+
+  warn "Adding third-party PHP repository: ppa:ondrej/php"
+  add-apt-repository -y ppa:ondrej/php
+  apt-get update
+}
+
 install_optional_php84() {
   if [[ "$INSTALL_PHP84" != true ]]; then
     return
@@ -273,14 +295,24 @@ install_optional_php84() {
 
   info "Checking PHP 8.4 availability from configured apt repositories"
   apt-get update
-  if apt-cache show php8.4-fpm >/dev/null 2>&1; then
-    install_php_packages "8.4"
-    configure_php "8.4"
-    systemctl enable --now php8.4-fpm
-    success "PHP 8.4 installed"
-  else
-    warn "PHP 8.4 is not available from the configured apt repositories. Skipping PHP 8.4."
+  if ! apt-cache show php8.4-fpm >/dev/null 2>&1; then
+    if [[ "$INSTALL_PHP84_PPA" == true ]]; then
+      add_ondrej_php_ppa
+    else
+      warn "PHP 8.4 is not available from configured apt repositories. Re-run with --with-php84-ppa to add ppa:ondrej/php."
+      return
+    fi
   fi
+
+  if ! apt-cache show php8.4-fpm >/dev/null 2>&1; then
+    error "PHP 8.4 is still not available after apt repository update"
+  fi
+
+  install_php_packages "8.4"
+  configure_php "8.4"
+  check_laravel_extensions "8.4"
+  systemctl enable --now php8.4-fpm
+  success "PHP 8.4 installed"
 }
 
 configure_php() {
@@ -361,20 +393,21 @@ install_composer() {
   fi
 
   info "Installing Composer with installer checksum verification"
-  local tmp_dir expected_checksum actual_checksum installer
+  local tmp_dir expected_checksum actual_checksum installer php_bin
   tmp_dir="$(mktemp -d)"
   installer="${tmp_dir}/composer-setup.php"
+  php_bin="$(command -v "php${PHP_DEFAULT_VERSION}" || command -v php)"
 
   expected_checksum="$(curl -fsSL https://composer.github.io/installer.sig)"
   curl -fsSL https://getcomposer.org/installer -o "$installer"
-  actual_checksum="$(php -r "echo hash_file('sha384', '${installer}');")"
+  actual_checksum="$("$php_bin" -r "echo hash_file('sha384', '${installer}');")"
 
   if [[ "$actual_checksum" != "$expected_checksum" ]]; then
     rm -rf "$tmp_dir"
     error "Composer installer checksum mismatch"
   fi
 
-  php "$installer" --install-dir=/usr/local/bin --filename=composer
+  "$php_bin" "$installer" --install-dir=/usr/local/bin --filename=composer
   rm -rf "$tmp_dir"
   success "Composer installed: $(composer -V)"
 }
@@ -479,6 +512,9 @@ Installed versions:
 HEADER
   nginx -v 2>&1 || true
   php -v | head -n 1 || true
+  if command -v php8.4 >/dev/null 2>&1; then
+    php8.4 -v | head -n 1 || true
+  fi
   composer -V || true
   node -v || true
   npm -v || true
