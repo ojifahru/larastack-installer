@@ -522,6 +522,20 @@ HEADER
   redis-server --version || true
 }
 
+install_larastack_command() {
+  local script_dir installer
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  installer="${script_dir}/install-larastack-command.sh"
+
+  if [[ ! -f "$installer" ]]; then
+    warn "Global larastack command installer not found: $installer"
+    return
+  fi
+
+  info "Installing global larastack commands"
+  bash "$installer"
+}
+
 main() {
   info "Laravel production server installation started"
   if [[ "$INTERACTIVE" == true ]]; then
@@ -544,6 +558,7 @@ main() {
   configure_ufw
   enable_services
   print_versions
+  install_larastack_command
   success "Installation complete. Log saved to $LOG_FILE"
 }
 

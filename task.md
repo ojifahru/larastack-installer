@@ -40,6 +40,13 @@
   - [x] Dokumentasikan workflow admin membuat slot hosting kosong dan pengelola mengisi `public_html`.
   - [x] Sesuaikan `check-laravel-site.sh` agar website kosong tidak dianggap gagal fatal sebelum Laravel/artisan ada.
 
+- [x] Tambahkan launcher global `larastack` dan `larastack-installer`.
+  - [x] Buat menu utama yang menampilkan fitur tersedia.
+  - [x] Buat subcommand untuk menjalankan script dari folder mana pun.
+  - [x] Buat `install-larastack-command.sh` untuk symlink ke `/usr/local/bin`.
+  - [x] Pasang command global otomatis setelah `install-laravel-server.sh`.
+  - [x] Dokumentasikan cara menjalankan `larastack` dan `larastack-installer`.
+
 ## Prioritas Menengah
 
 - [x] Buat `backup-laravel-site.sh`.

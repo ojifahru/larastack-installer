@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+resolve_script_dir() {
+  local source="${BASH_SOURCE[0]}"
+  local dir
+
+  while [[ -L "$source" ]]; do
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    [[ "$source" == /* ]] || source="${dir}/${source}"
+  done
+
+  cd -P "$(dirname "$source")" && pwd
+}
+
+SCRIPT_DIR="$(resolve_script_dir)"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  larastack
+  larastack <command> [options]
+
+Commands:
+  install-server      Install Laravel production server stack
+  create-site         Create a Laravel site or handoff slot
+  list-sites          List websites
+  check-site          Check website health
+  deploy              Deploy an existing site
+  backup              Backup a site
+  restore             Restore a site backup
+  queue               Create/update Laravel queue worker
+  grant-ssh           Grant SSH access to website manager
+  revoke-ssh          Revoke SSH access from website manager
+  remove-site         Remove a site
+  install-command     Install/update global larastack commands
+
+Examples:
+  larastack
+  larastack create-site --domain=example.com --handoff
+  larastack list-sites --summary
+  larastack check-site --domain=example.com
+USAGE
+}
+
+info() { printf '[INFO] %s\n' "$*"; }
+warn() { printf '[WARN] %s\n' "$*"; }
+error() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+
+script_path() {
+  local script="$1"
+  local path="${SCRIPT_DIR}/${script}"
+  [[ -f "$path" ]] || error "Script not found: $path"
+  printf '%s' "$path"
+}
+
+run_script() {
+  local script="$1"
+  shift || true
+  bash "$(script_path "$script")" "$@"
+}
+
+pause_if_interactive() {
+  [[ -t 0 ]] || return
+  printf '\nPress Enter to return to menu...' 
+  IFS= read -r _ || true
+}
+
+prompt_text() {
+  local prompt="$1"
+  local value
+  printf '%s' "$prompt" >&2
+  if ! IFS= read -r value; then
+    return 1
+  fi
+  printf '%s' "$value"
+}
+
+run_menu_command() {
+  local script="$1"
+  shift || true
+
+  if ! run_script "$script" "$@"; then
+    warn "Command failed: $script"
+  fi
+  pause_if_interactive
+}
+
+run_check_from_menu() {
+  local domain
+  domain="$(prompt_text "Domain to check. Empty = all sites: ")"
+  if [[ -n "$domain" ]]; then
+    run_menu_command "check-laravel-site.sh" "--domain=${domain}"
+  else
+    run_menu_command "check-laravel-site.sh" "--all"
+  fi
+}
+
+show_menu() {
+  cat <<'MENU'
+
+LaraStack Installer
+----------------------------------------------------------------
+1. Install server stack
+2. Create website / handoff slot
+3. List websites
+4. Check website health
+5. Deploy website
+6. Backup website
+7. Restore website
+8. Create/update queue worker
+9. Grant SSH access to manager
+10. Revoke SSH access from manager
+11. Remove website
+12. Install/update global command
+0. Exit
+
+MENU
+}
+
+interactive_menu() {
+  local choice
+
+  while true; do
+    show_menu
+    if ! choice="$(prompt_text "Choose menu: ")"; then
+      printf '\n'
+      exit 0
+    fi
+
+    case "$choice" in
+      1) run_menu_command "install-laravel-server.sh" ;;
+      2) run_menu_command "create-laravel-site.sh" ;;
+      3) run_menu_command "list-laravel-sites.sh" ;;
+      4) run_check_from_menu ;;
+      5) run_menu_command "deploy-laravel.sh" ;;
+      6) run_menu_command "backup-laravel-site.sh" ;;
+      7) run_menu_command "restore-laravel-site.sh" ;;
+      8) run_menu_command "create-supervisor-laravel-queue.sh" ;;
+      9) run_menu_command "grant-site-ssh-access.sh" ;;
+      10) run_menu_command "revoke-site-ssh-access.sh" ;;
+      11) run_menu_command "remove-laravel-site.sh" ;;
+      12) run_menu_command "install-larastack-command.sh" ;;
+      0|q|Q|exit) exit 0 ;;
+      h|help|-h|--help) usage; pause_if_interactive ;;
+      *) warn "Unknown menu choice: $choice"; pause_if_interactive ;;
+    esac
+  done
+}
+
+main() {
+  local command="${1:-}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+
+  case "$command" in
+    ""|menu) interactive_menu ;;
+    install-server|install) run_script "install-laravel-server.sh" "$@" ;;
+    create-site|create) run_script "create-laravel-site.sh" "$@" ;;
+    list-sites|list) run_script "list-laravel-sites.sh" "$@" ;;
+    check-site|check) run_script "check-laravel-site.sh" "$@" ;;
+    deploy) run_script "deploy-laravel.sh" "$@" ;;
+    backup) run_script "backup-laravel-site.sh" "$@" ;;
+    restore) run_script "restore-laravel-site.sh" "$@" ;;
+    queue) run_script "create-supervisor-laravel-queue.sh" "$@" ;;
+    grant-ssh) run_script "grant-site-ssh-access.sh" "$@" ;;
+    revoke-ssh) run_script "revoke-site-ssh-access.sh" "$@" ;;
+    remove-site|remove) run_script "remove-laravel-site.sh" "$@" ;;
+    install-command) run_script "install-larastack-command.sh" "$@" ;;
+    -h|--help|help) usage ;;
+    *) usage; error "Unknown command: $command" ;;
+  esac
+}
+
+main "$@"

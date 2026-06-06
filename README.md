@@ -33,10 +33,59 @@ Paket ini menyiapkan stack Laravel production tanpa aaPanel untuk Ubuntu 24.04:
 Jadikan script executable:
 
 ```bash
-chmod +x *.sh
+chmod +x larastack *.sh
 ```
 
 Semua script utama mendukung mode interaktif. Jalankan tanpa argumen untuk mode tanya-jawab, atau isi argumen jika ingin automation.
+
+## Command Global
+
+Pasang command global agar LaraStack bisa dijalankan dari folder mana pun:
+
+```bash
+sudo ./install-larastack-command.sh
+```
+
+Setelah itu jalankan:
+
+```bash
+larastack
+```
+
+atau:
+
+```bash
+larastack-installer
+```
+
+Keduanya membuka menu:
+
+```text
+1. Install server stack
+2. Create website / handoff slot
+3. List websites
+4. Check website health
+5. Deploy website
+6. Backup website
+7. Restore website
+8. Create/update queue worker
+9. Grant SSH access to manager
+10. Revoke SSH access from manager
+11. Remove website
+12. Install/update global command
+0. Exit
+```
+
+Command langsung juga tersedia:
+
+```bash
+larastack create-site --domain=example.com --handoff
+larastack list-sites --summary
+larastack check-site --domain=example.com
+larastack backup --domain=example.com
+```
+
+Jika menjalankan `sudo ./install-laravel-server.sh`, command global ini juga dipasang otomatis di akhir instalasi.
 
 ## Instalasi Awal Server
 
