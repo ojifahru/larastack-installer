@@ -21,6 +21,11 @@ Paket ini menyiapkan stack Laravel production tanpa aaPanel untuk Ubuntu 24.04:
 - `install-laravel-server.sh`: install stack production server.
 - `create-laravel-site.sh`: buat Nginx virtual host Laravel baru.
 - `list-laravel-sites.sh`: lihat daftar website dan info production-nya.
+- `backup-laravel-site.sh`: backup database, `.env`, upload, Nginx, dan PHP-FPM pool per site.
+- `restore-laravel-site.sh`: restore database, `.env`, upload, Nginx, dan PHP-FPM pool dari backup.
+- `check-laravel-site.sh`: health check Nginx, PHP-FPM, permission, `.env`, database, queue, SSL, dan HTTP.
+- `grant-site-ssh-access.sh`: beri akses SSH key ke pengelola website tanpa sudo.
+- `revoke-site-ssh-access.sh`: cabut akses SSH key pengelola website.
 - `deploy-laravel.sh`: deploy project Laravel existing.
 - `create-supervisor-laravel-queue.sh`: buat queue worker Laravel via Supervisor.
 - `remove-laravel-site.sh`: hapus site dengan konfirmasi eksplisit untuk data.
@@ -106,6 +111,29 @@ sudo ./create-laravel-site.sh \
   --site-user=example
 ```
 
+Membuat slot website kosong untuk pengelola:
+
+```bash
+sudo ./create-laravel-site.sh \
+  --domain=example.com \
+  --site-user=example \
+  --handoff \
+  --db-name=example_db \
+  --db-user=example_user \
+  --db-pass=random
+```
+
+Sekaligus beri akses SSH pengelola:
+
+```bash
+sudo ./create-laravel-site.sh \
+  --domain=example.com \
+  --site-user=example \
+  --handoff \
+  --manager-key-file=/tmp/pengelola.pub \
+  --login-host=server.example.com
+```
+
 Dengan alias:
 
 ```bash
@@ -166,6 +194,52 @@ Setiap site dibuat dengan:
 - socket sendiri, contoh `/run/php/php8.3-fpm-example.sock`
 - owner project `example:example`
 - `.env` otomatis diisi `APP_URL`, `DB_CONNECTION`, `DB_HOST`, `DB_DATABASE`, `DB_USERNAME`, dan `DB_PASSWORD` jika file `.env` ada atau dibuat dari `.env.example`
+
+### Mode Handoff Website Kosong
+
+Mode `--handoff` atau `--empty-site` dipakai saat admin hanya menyiapkan slot hosting, lalu pengelola website yang mengisi aplikasi.
+
+Saat menjalankan mode interaktif:
+
+```bash
+sudo ./create-laravel-site.sh
+```
+
+script akan menanyakan:
+
+```text
+Buat slot website kosong untuk pengelola?
+```
+
+Jika dijawab `y`, script akan:
+
+- membuat Linux site user
+- membuat `/home/{site_user}/public_html`
+- membuat placeholder `/home/{site_user}/public_html/public/index.html`
+- membuat Nginx server block ke `/home/{site_user}/public_html/public`
+- membuat PHP-FPM pool per site user
+- membuat database dan user database jika diminta
+- membuat file handoff `/home/{site_user}/site-info.env`
+- melewati clone repo, Composer, NPM, Artisan, migrate, seeder, dan queue
+
+File handoff hanya bisa dibaca site user:
+
+```bash
+/home/example/site-info.env
+```
+
+Pengelola login lalu mengisi aplikasi:
+
+```bash
+ssh example@server.example.com
+cd ~/public_html
+```
+
+Untuk Laravel, pengelola perlu memastikan entry point berada di:
+
+```bash
+/home/example/public_html/public/index.php
+```
 
 ### Public Repo
 
@@ -258,14 +332,13 @@ Atau buat queue terpisah:
 sudo ./create-supervisor-laravel-queue.sh
 ```
 
+Mode interaktif dan `--domain` akan mencoba mendeteksi path, site user, dan versi PHP dari Nginx/PHP-FPM pool. Default user worker diambil dari owner project, bukan `www-data`.
+
 Mode argumen:
 
 ```bash
 sudo ./create-supervisor-laravel-queue.sh \
-  --name=example.com \
-  --path=/home/example/public_html \
-  --php=8.3 \
-  --user=example \
+  --domain=example.com \
   --workers=1
 ```
 
@@ -302,6 +375,8 @@ Deploy berikutnya:
 sudo ./deploy-laravel.sh
 ```
 
+Deploy interaktif akan mencoba mendeteksi domain, site user, versi PHP, dan path dari Nginx/PHP-FPM pool. Semua command deploy dijalankan sebagai site user.
+
 Mode argumen:
 
 ```bash
@@ -317,6 +392,32 @@ sudo ./deploy-laravel.sh \
   --path=/home/example/public_html \
   --branch=main \
   --php=8.4
+```
+
+Deploy berdasarkan domain:
+
+```bash
+sudo ./deploy-laravel.sh \
+  --domain=example.com \
+  --branch=main
+```
+
+Deploy dengan seeder:
+
+```bash
+sudo ./deploy-laravel.sh \
+  --domain=example.com \
+  --branch=main \
+  --seed
+```
+
+Deploy dengan maintenance mode:
+
+```bash
+sudo ./deploy-laravel.sh \
+  --domain=example.com \
+  --branch=main \
+  --maintenance
 ```
 
 Skip npm build:
@@ -363,7 +464,98 @@ Filter satu domain:
 sudo ./list-laravel-sites.sh --domain=example.com
 ```
 
+Output JSON untuk dashboard/monitoring:
+
+```bash
+sudo ./list-laravel-sites.sh --json
+sudo ./list-laravel-sites.sh --domain=example.com --json
+```
+
 Info yang ditampilkan mencakup domain, alias, status enabled Nginx, `APP_URL`, SSL, site user, project path, owner, disk usage, PHP-FPM pool/socket, repository, branch, Laravel version, database name/user, credential file, dan status queue.
+
+## Cek Health Website
+
+Cek satu website:
+
+```bash
+sudo ./check-laravel-site.sh --domain=example.com
+```
+
+Cek semua website:
+
+```bash
+sudo ./check-laravel-site.sh --all
+```
+
+Lewati HTTP check jika domain belum pointing atau DNS belum aktif:
+
+```bash
+sudo ./check-laravel-site.sh --domain=example.com --no-http
+```
+
+Yang dicek:
+
+- Nginx config dan status enabled site
+- PHP-FPM pool, service, dan socket
+- permission project, `storage`, `bootstrap/cache`, dan `.env`
+- nilai penting `.env`
+- koneksi database via Artisan
+- status Supervisor queue
+- masa berlaku SSL
+- response HTTP/HTTPS domain
+
+## Akses SSH Pengelola Website
+
+Pengelola website sebaiknya login sebagai site user milik websitenya, tanpa akses `sudo`.
+
+Minta pengelola mengirim public key dari laptopnya:
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
+
+Beri akses:
+
+```bash
+sudo ./grant-site-ssh-access.sh \
+  --domain=example.com \
+  --key-file=/tmp/pengelola.pub \
+  --host=server.example.com
+```
+
+Atau mode interaktif:
+
+```bash
+sudo ./grant-site-ssh-access.sh
+```
+
+Script akan:
+
+- auto-detect site user dari domain/Nginx config
+- menambahkan key ke `/home/{site_user}/.ssh/authorized_keys`
+- set permission `.ssh` dan `authorized_keys`
+- memastikan user tidak berada di grup `sudo`, `admin`, atau `wheel`
+- menampilkan command login
+
+Pengelola login dengan:
+
+```bash
+ssh example@server.example.com
+```
+
+Lihat key yang terpasang:
+
+```bash
+sudo ./revoke-site-ssh-access.sh --domain=example.com --list
+```
+
+Cabut akses:
+
+```bash
+sudo ./revoke-site-ssh-access.sh \
+  --domain=example.com \
+  --key-file=/tmp/pengelola.pub
+```
 
 ## Cek Log
 
@@ -390,7 +582,7 @@ Supervisor:
 
 ```bash
 sudo supervisorctl status
-sudo tail -f /var/log/supervisor/example.com-queue.log
+sudo tail -f /var/log/supervisor/example.com/queue.log
 ```
 
 Certbot:
@@ -422,6 +614,93 @@ Restart queue:
 sudo supervisorctl restart example.com-queue:*
 ```
 
+## Backup Website
+
+Backup satu website:
+
+```bash
+sudo ./backup-laravel-site.sh --domain=example.com
+```
+
+Backup semua website:
+
+```bash
+sudo ./backup-laravel-site.sh --all
+```
+
+Mode interaktif:
+
+```bash
+sudo ./backup-laravel-site.sh
+```
+
+Backup disimpan dengan timestamp:
+
+```bash
+/root/backups/laravel/example.com/YYYYMMDDHHMMSS
+```
+
+Isi backup:
+
+- `database/database.sql.gz`
+- `env/.env`
+- `storage-app-public.tar.gz`
+- `nginx/site.conf`
+- `php-fpm/pool.conf`
+- `manifest.env`
+
+Symlink `latest` menunjuk ke backup terbaru:
+
+```bash
+/root/backups/laravel/example.com/latest
+```
+
+## Restore Website
+
+Restore backup terbaru untuk satu domain:
+
+```bash
+sudo ./restore-laravel-site.sh --domain=example.com
+```
+
+Restore dari path backup tertentu:
+
+```bash
+sudo ./restore-laravel-site.sh \
+  --backup=/root/backups/laravel/example.com/20260606153000
+```
+
+Script akan menampilkan ringkasan dan meminta konfirmasi ketik:
+
+```text
+RESTORE example.com
+```
+
+Untuk automation:
+
+```bash
+sudo ./restore-laravel-site.sh --domain=example.com --yes
+```
+
+Restore sebagian:
+
+```bash
+sudo ./restore-laravel-site.sh --domain=example.com --skip-db
+sudo ./restore-laravel-site.sh --domain=example.com --skip-storage
+sudo ./restore-laravel-site.sh --domain=example.com --skip-config
+```
+
+Saat restore, script akan:
+
+- membuat site user jika belum ada
+- restore Nginx config dan PHP-FPM pool
+- restore `.env` dengan permission `0600`
+- restore `storage/app/public`
+- membuat database jika belum ada
+- membuat atau update user database dari `.env`
+- import `database.sql.gz`
+- restart PHP-FPM dan reload Nginx
+
 ## Backup Database Sederhana
 
 Buat folder backup:
@@ -451,7 +730,7 @@ Mode interaktif:
 sudo ./remove-laravel-site.sh
 ```
 
-Hapus config Nginx dan Supervisor saja:
+Hapus config Nginx, PHP-FPM pool, dan Supervisor saja:
 
 ```bash
 sudo ./remove-laravel-site.sh --domain=example.com
@@ -471,6 +750,12 @@ sudo ./remove-laravel-site.sh \
   --delete-db \
   --db-name=example_db \
   --db-user=example_user
+```
+
+Hapus Linux user atau SSL certificate juga bisa, dan tetap harus mengetik konfirmasi eksplisit:
+
+```bash
+sudo ./remove-laravel-site.sh --domain=example.com --delete-user --delete-ssl
 ```
 
 ## Troubleshooting

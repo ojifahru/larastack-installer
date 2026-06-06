@@ -18,6 +18,10 @@ EMAIL=""
 PRIVATE_REPO=false
 SKIP_KEYGEN=false
 KEY_NAME="id_ed25519"
+HANDOFF=false
+MANAGER_KEY=""
+MANAGER_KEY_FILE=""
+LOGIN_HOST=""
 NO_INSTALL_DEPS=false
 MIGRATE=false
 SEED=false
@@ -46,6 +50,11 @@ Options:
   --private-repo
   --skip-keygen
   --key-name=id_ed25519
+  --handoff
+  --empty-site
+  --manager-key='ssh-ed25519 AAAA... user@laptop'
+  --manager-key-file=/path/to/manager.pub
+  --login-host=server.example.com
   --db-name=example_db
   --db-user=example_user
   --db-pass=random
@@ -71,6 +80,10 @@ for arg in "$@"; do
     --private-repo) PRIVATE_REPO=true ;;
     --skip-keygen) SKIP_KEYGEN=true ;;
     --key-name=*) KEY_NAME="${arg#*=}" ;;
+    --handoff|--empty-site) HANDOFF=true ;;
+    --manager-key=*) MANAGER_KEY="${arg#*=}" ;;
+    --manager-key-file=*) MANAGER_KEY_FILE="${arg#*=}" ;;
+    --login-host=*) LOGIN_HOST="${arg#*=}" ;;
     --db-name=*) DB_NAME="${arg#*=}" ;;
     --db-user=*) DB_USER="${arg#*=}" ;;
     --db-pass=*) DB_PASS="${arg#*=}" ;;
@@ -265,6 +278,27 @@ validate_input() {
   [[ "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] || error "--php must look like 8.3"
   [[ "$KEY_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || error "--key-name may only contain letters, numbers, dot, underscore, and dash"
 
+  if [[ "$HANDOFF" == true ]]; then
+    if [[ -n "$REPO" || "$PRIVATE_REPO" == true ]]; then
+      error "--handoff/--empty-site cannot be combined with --repo or --private-repo"
+    fi
+
+    if [[ "$MIGRATE" == true || "$SEED" == true ]]; then
+      error "--handoff/--empty-site cannot run migrations or seeders because no Laravel app exists yet"
+    fi
+
+    if [[ "$WITH_QUEUE" == true ]]; then
+      warn "--with-queue ignored in handoff mode because no Laravel app exists yet"
+      WITH_QUEUE=false
+    fi
+
+    NO_INSTALL_DEPS=true
+  fi
+
+  if [[ -n "$MANAGER_KEY_FILE" ]]; then
+    [[ -f "$MANAGER_KEY_FILE" ]] || error "--manager-key-file not found: $MANAGER_KEY_FILE"
+  fi
+
   if [[ -n "$ALIASES" ]]; then
     local alias
     for alias in ${ALIASES//,/ }; do
@@ -458,18 +492,25 @@ EOF
   PHP_VERSION="$(prompt_required "Versi PHP-FPM" "$PHP_VERSION")"
   [[ "$KEY_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || error "--key-name may only contain letters, numbers, dot, underscore, and dash"
 
-  if [[ "$PRIVATE_REPO" != true ]] && prompt_yes_no "Repository private?" "n"; then
-    PRIVATE_REPO=true
+  if [[ "$HANDOFF" != true ]] && prompt_yes_no "Buat slot website kosong untuk pengelola? Admin hanya setup Nginx/PHP-FPM/database" "n"; then
+    HANDOFF=true
+    NO_INSTALL_DEPS=true
   fi
 
-  if [[ "$PRIVATE_REPO" == true ]]; then
-    prepare_private_repo_access
-  fi
+  if [[ "$HANDOFF" != true ]]; then
+    if [[ "$PRIVATE_REPO" != true ]] && prompt_yes_no "Repository private?" "n"; then
+      PRIVATE_REPO=true
+    fi
 
-  REPO="$(prompt_text "Git repository URL. Private repo wajib format SSH git@github.com:username/repo.git" "$REPO")"
+    if [[ "$PRIVATE_REPO" == true ]]; then
+      prepare_private_repo_access
+    fi
 
-  if [[ "$PRIVATE_REPO" == true && -n "$REPO" && ! "$REPO" =~ ^git@github\.com:.+\.git$ ]]; then
-    error "Private repo must use SSH format: git@github.com:username/repo.git"
+    REPO="$(prompt_text "Git repository URL. Private repo wajib format SSH git@github.com:username/repo.git" "$REPO")"
+
+    if [[ "$PRIVATE_REPO" == true && -n "$REPO" && ! "$REPO" =~ ^git@github\.com:.+\.git$ ]]; then
+      error "Private repo must use SSH format: git@github.com:username/repo.git"
+    fi
   fi
 
   ALIASES="$(prompt_text "Alias domain, pisahkan dengan koma. Contoh: www.${DOMAIN}. Kosongkan jika tidak ada" "$ALIASES")"
@@ -501,20 +542,25 @@ EOF
     EMAIL="$(prompt_text "Email Let's Encrypt. Kosongkan untuk tanpa email" "$EMAIL")"
   fi
 
-  if [[ "$WITH_QUEUE" != true ]] && prompt_yes_no "Buat Supervisor queue worker?" "n"; then
+  if [[ "$HANDOFF" != true && "$WITH_QUEUE" != true ]] && prompt_yes_no "Buat Supervisor queue worker?" "n"; then
     WITH_QUEUE=true
   fi
 
-  if [[ "$NO_INSTALL_DEPS" != true ]] && ! prompt_yes_no "Jalankan composer/npm/artisan setup sebagai ${SITE_USER}?" "y"; then
+  if [[ "$HANDOFF" != true && "$NO_INSTALL_DEPS" != true ]] && ! prompt_yes_no "Jalankan composer/npm/artisan setup sebagai ${SITE_USER}?" "y"; then
     NO_INSTALL_DEPS=true
   fi
 
-  if [[ "$NO_INSTALL_DEPS" != true && "$MIGRATE" != true ]] && prompt_yes_no "Jalankan php artisan migrate --force?" "n"; then
+  if [[ "$HANDOFF" != true && "$NO_INSTALL_DEPS" != true && "$MIGRATE" != true ]] && prompt_yes_no "Jalankan php artisan migrate --force?" "n"; then
     MIGRATE=true
   fi
 
-  if [[ "$MIGRATE" == true && "$SEED" != true ]] && prompt_yes_no "Jalankan database seeder setelah migrate?" "n"; then
+  if [[ "$HANDOFF" != true && "$MIGRATE" == true && "$SEED" != true ]] && prompt_yes_no "Jalankan database seeder setelah migrate?" "n"; then
     SEED=true
+  fi
+
+  if [[ "$HANDOFF" == true ]] && prompt_yes_no "Tambahkan akses SSH pengelola sekarang?" "n"; then
+    MANAGER_KEY="$(prompt_required "Paste public SSH key pengelola" "$MANAGER_KEY")"
+    LOGIN_HOST="$(prompt_text "Host/IP untuk command login" "$LOGIN_HOST")"
   fi
 
   cat > /dev/tty <<EOF
@@ -526,10 +572,12 @@ Ringkasan site:
   home directory:   ${HOME_DIR}
   project path:     ${SITE_PATH}
   PHP:              ${PHP_VERSION}
+  handoff mode:     ${HANDOFF}
   repo:             ${REPO:-"-"}
   private repo:     ${PRIVATE_REPO}
   database:         ${DB_NAME:-"-"}
   db user:          ${DB_USER:-"-"}
+  manager SSH key:  $([[ -n "$MANAGER_KEY" || -n "$MANAGER_KEY_FILE" ]] && echo "yes" || echo "no")
   install deps:     $([[ "$NO_INSTALL_DEPS" == true ]] && echo "false" || echo "true")
   migrate:          ${MIGRATE}
   seed:             ${SEED}
@@ -566,6 +614,8 @@ create_project_path() {
   if [[ -e "$SITE_PATH" && -n "$(find "$SITE_PATH" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
     if [[ -d "${SITE_PATH}/.git" ]]; then
       warn "$SITE_PATH already contains a git repository; skipping clone"
+    elif [[ "$HANDOFF" == true && -z "$REPO" ]]; then
+      warn "$SITE_PATH already contains files; handoff mode will not overwrite them"
     else
       error "$SITE_PATH exists and is not empty. Refusing to overwrite it."
     fi
@@ -587,6 +637,66 @@ create_project_path() {
   fi
 
   install -d -m 0755 "${SITE_PATH}/public"
+  chown -R "$SITE_USER:$SITE_USER" "$SITE_PATH"
+}
+
+create_handoff_placeholder() {
+  if [[ "$HANDOFF" != true ]]; then
+    return
+  fi
+
+  local public_dir="${SITE_PATH}/public"
+  local placeholder="${public_dir}/index.html"
+
+  install -d -m 0755 "$public_dir"
+
+  if [[ -f "${public_dir}/index.php" || -f "$placeholder" ]]; then
+    info "Handoff placeholder already exists or app index.php is present"
+  else
+    info "Creating handoff placeholder page"
+    write_file_if_changed "$placeholder" 0644 <<EOF
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${DOMAIN}</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f6f7f9;
+      color: #1f2933;
+      display: grid;
+      min-height: 100vh;
+      place-items: center;
+    }
+    main {
+      max-width: 680px;
+      padding: 32px;
+      text-align: center;
+    }
+    h1 {
+      font-size: 28px;
+      margin: 0 0 12px;
+    }
+    p {
+      color: #52606d;
+      line-height: 1.6;
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${DOMAIN}</h1>
+    <p>Website sudah disiapkan. Pengelola dapat mengunggah aplikasi ke public_html.</p>
+  </main>
+</body>
+</html>
+EOF
+  fi
+
   chown -R "$SITE_USER:$SITE_USER" "$SITE_PATH"
 }
 
@@ -703,6 +813,41 @@ EOF
   fi
 }
 
+create_handoff_info_file() {
+  if [[ "$HANDOFF" != true ]]; then
+    return
+  fi
+
+  local handoff_file="${HOME_DIR}/site-info.env"
+  local scheme="http"
+  local manager_login_host="${LOGIN_HOST:-SERVER_IP_OR_HOST}"
+
+  if [[ "$WITH_SSL" == true ]]; then
+    scheme="https"
+  fi
+
+  info "Writing handoff info file for ${SITE_USER}"
+  write_file_if_changed "$handoff_file" 0600 <<EOF
+DOMAIN=$(env_value "$DOMAIN")
+APP_URL=$(env_value "${scheme}://${DOMAIN}")
+SITE_USER=$(env_value "$SITE_USER")
+HOME_DIR=$(env_value "$HOME_DIR")
+PROJECT_PATH=$(env_value "$SITE_PATH")
+PUBLIC_PATH=$(env_value "${SITE_PATH}/public")
+PHP_VERSION=$(env_value "$PHP_VERSION")
+DB_CONNECTION=$(env_value "mysql")
+DB_HOST=$(env_value "127.0.0.1")
+DB_PORT=$(env_value "3306")
+DB_DATABASE=$(env_value "${DB_NAME:-}")
+DB_USERNAME=$(env_value "${DB_USER:-}")
+DB_PASSWORD=$(env_value "${DB_PASS:-}")
+SSH_LOGIN=$(env_value "ssh ${SITE_USER}@${manager_login_host}")
+EOF
+  chown "$SITE_USER:$SITE_USER" "$handoff_file"
+  chmod 0600 "$handoff_file"
+  success "Handoff info stored at $handoff_file"
+}
+
 env_value() {
   local value="$1"
 
@@ -737,7 +882,7 @@ set_env_key() {
     }
   ' "$env_file" > "$tmp"
 
-  install -m 0644 "$tmp" "$env_file"
+  install -m 0600 "$tmp" "$env_file"
   rm -f "$tmp"
   chown "$SITE_USER:$SITE_USER" "$env_file"
 }
@@ -780,6 +925,32 @@ configure_laravel_env() {
   backup_file "$env_file"
   configure_laravel_env_database
   configure_laravel_env_app_url
+}
+
+grant_manager_ssh_access() {
+  if [[ -z "$MANAGER_KEY" && -z "$MANAGER_KEY_FILE" ]]; then
+    return
+  fi
+
+  local script_dir
+  local grant_args=()
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  [[ -x "${script_dir}/grant-site-ssh-access.sh" ]] || error "grant-site-ssh-access.sh not found or not executable"
+
+  grant_args+=(--domain="$DOMAIN" --site-user="$SITE_USER")
+  if [[ -n "$MANAGER_KEY" ]]; then
+    grant_args+=(--key="$MANAGER_KEY")
+  fi
+  if [[ -n "$MANAGER_KEY_FILE" ]]; then
+    grant_args+=(--key-file="$MANAGER_KEY_FILE")
+  fi
+  if [[ -n "$LOGIN_HOST" ]]; then
+    grant_args+=(--host="$LOGIN_HOST")
+  fi
+
+  info "Granting SSH access to website manager"
+  bash "${script_dir}/grant-site-ssh-access.sh" "${grant_args[@]}"
 }
 
 install_laravel_dependencies() {
@@ -930,6 +1101,10 @@ set_permissions() {
     chmod -R 775 "${SITE_PATH}/bootstrap/cache"
   fi
 
+  if [[ -f "${SITE_PATH}/.env" ]]; then
+    chmod 0600 "${SITE_PATH}/.env"
+  fi
+
   chmod 0755 "$HOME_DIR"
   chmod 0755 "$SITE_PATH"
 }
@@ -982,6 +1157,7 @@ print_summary() {
   local db_user_status="-"
   local credential_file="/root/laravel-deploy/credentials/${DOMAIN}.db.env"
   local public_key="${HOME_DIR}/.ssh/${KEY_NAME}.pub"
+  local handoff_file="${HOME_DIR}/site-info.env"
 
   [[ "$WITH_SSL" == true ]] && ssl_status="enabled"
   [[ "$WITH_QUEUE" == true ]] && queue_status="enabled"
@@ -1002,6 +1178,8 @@ Site summary:
   database:        ${db_status}
   database user:   ${db_user_status}
   credentials:     $([[ -f "$credential_file" ]] && echo "$credential_file" || echo "-")
+  handoff mode:    ${HANDOFF}
+  handoff info:    $([[ -f "$handoff_file" ]] && echo "$handoff_file" || echo "-")
   SSL:             ${ssl_status}
   queue:           ${queue_status}
   repo:            ${REPO:-"-"}
@@ -1023,13 +1201,16 @@ main() {
 
   ensure_php_fpm_available
   create_project_path
+  create_handoff_placeholder
   check_project_php_requirement
   create_php_fpm_pool
   create_database
+  create_handoff_info_file
   install_laravel_dependencies
   set_permissions
   create_nginx_site
   enable_ssl
+  grant_manager_ssh_access
   enable_queue
   print_summary
 }

@@ -3,6 +3,8 @@ set -euo pipefail
 
 DOMAIN_FILTER=""
 SUMMARY=false
+JSON=false
+JSON_FIRST=true
 
 usage() {
   cat <<'USAGE'
@@ -11,6 +13,7 @@ Usage:
 
 Options:
   --summary              Show compact one-line summary per site
+  --json                 Show machine-readable JSON array
   --domain=example.com   Show only one domain
   -h, --help             Show this help
 USAGE
@@ -19,6 +22,7 @@ USAGE
 for arg in "$@"; do
   case "$arg" in
     --summary) SUMMARY=true ;;
+    --json) JSON=true ;;
     --domain=*) DOMAIN_FILTER="${arg#*=}" ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; usage; exit 1 ;;
@@ -46,6 +50,20 @@ nginx_directive() {
 normalize_dash() {
   local value="${1:-}"
   [[ -n "$value" ]] && printf '%s' "$value" || printf '%s' "-"
+}
+
+json_escape() {
+  local value="${1:-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "$value"
+}
+
+json_value() {
+  printf '"%s"' "$(json_escape "${1:-}")"
 }
 
 env_get() {
@@ -280,6 +298,49 @@ print_site() {
   access_log="/var/log/nginx/${domain}.access.log"
   error_log="/var/log/nginx/${domain}.error.log"
 
+  if [[ "$JSON" == true ]]; then
+    if [[ "$JSON_FIRST" == true ]]; then
+      JSON_FIRST=false
+    else
+      printf ',\n'
+    fi
+
+    cat <<EOF
+  {
+    "domain": $(json_value "$domain"),
+    "aliases": $(json_value "$aliases"),
+    "enabled": $(json_value "$enabled"),
+    "app_url": $(json_value "$app_url"),
+    "ssl": $(json_value "$ssl"),
+    "site_user": $(json_value "$site_user"),
+    "home_directory": $(json_value "$home_dir"),
+    "project_path": $(json_value "$project_path"),
+    "project_owner": $(json_value "$owner"),
+    "project_group": $(json_value "$group"),
+    "disk_usage": $(json_value "$disk"),
+    "ssh_public_key": $(json_value "$public_key"),
+    "nginx_file": $(json_value "$site_file"),
+    "nginx_root": $(json_value "$root_path"),
+    "access_log": $(json_value "$access_log"),
+    "error_log": $(json_value "$error_log"),
+    "php_version": $(json_value "$php_version"),
+    "php_fpm_service": $(json_value "$php_service_status"),
+    "php_fpm_pool": $(json_value "$pool_file"),
+    "php_fpm_user": $(json_value "$pool_run_user"),
+    "php_fpm_socket": $(json_value "$socket"),
+    "socket_exists": $(json_value "$socket_status"),
+    "repository": $(json_value "$repo"),
+    "git_branch": $(json_value "$branch"),
+    "laravel": $(json_value "$laravel"),
+    "database_name": $(json_value "$db_name"),
+    "database_user": $(json_value "$db_user"),
+    "credential_file": $(json_value "$([[ -f "$credential_file" ]] && echo "$credential_file" || echo "-")"),
+    "queue_status": $(json_value "$queue")
+  }
+EOF
+    return
+  fi
+
   if [[ "$SUMMARY" == true ]]; then
     printf '%-30s %-8s %-14s %-8s %-28s %-9s %-10s %s\n' \
       "$domain" \
@@ -336,6 +397,10 @@ main() {
   local files=()
   local file
 
+  if [[ "$SUMMARY" == true && "$JSON" == true ]]; then
+    error "Use either --summary or --json, not both"
+  fi
+
   if [[ ! -d /etc/nginx/sites-available ]]; then
     error "/etc/nginx/sites-available not found. Is Nginx installed?"
   fi
@@ -345,8 +410,16 @@ main() {
   done < <(find /etc/nginx/sites-available -maxdepth 1 -type f ! -name default | sort)
 
   if (( ${#files[@]} == 0 )); then
+    if [[ "$JSON" == true ]]; then
+      printf '[]\n'
+      return
+    fi
     warn "No Nginx site files found in /etc/nginx/sites-available"
     return
+  fi
+
+  if [[ "$JSON" == true ]]; then
+    printf '[\n'
   fi
 
   if [[ "$SUMMARY" == true ]]; then
@@ -356,6 +429,10 @@ main() {
   for file in "${files[@]}"; do
     print_site "$file"
   done
+
+  if [[ "$JSON" == true ]]; then
+    printf '\n]\n'
+  fi
 }
 
 main "$@"
