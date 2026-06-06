@@ -20,6 +20,7 @@ Paket ini menyiapkan stack Laravel production tanpa aaPanel untuk Ubuntu 24.04:
 
 - `install-laravel-server.sh`: install stack production server.
 - `create-laravel-site.sh`: buat Nginx virtual host Laravel baru.
+- `list-laravel-sites.sh`: lihat daftar website dan info production-nya.
 - `deploy-laravel.sh`: deploy project Laravel existing.
 - `create-supervisor-laravel-queue.sh`: buat queue worker Laravel via Supervisor.
 - `remove-laravel-site.sh`: hapus site dengan konfirmasi eksplisit untuk data.
@@ -341,6 +342,28 @@ Log deploy disimpan di:
 ```bash
 /var/log/laravel-deploy/deploy-example.com.log
 ```
+
+## Melihat Website
+
+Lihat semua website beserta detailnya:
+
+```bash
+sudo ./list-laravel-sites.sh
+```
+
+Tampilan ringkas:
+
+```bash
+sudo ./list-laravel-sites.sh --summary
+```
+
+Filter satu domain:
+
+```bash
+sudo ./list-laravel-sites.sh --domain=example.com
+```
+
+Info yang ditampilkan mencakup domain, alias, status enabled Nginx, `APP_URL`, SSL, site user, project path, owner, disk usage, PHP-FPM pool/socket, repository, branch, Laravel version, database name/user, credential file, dan status queue.
 
 ## Cek Log
 
