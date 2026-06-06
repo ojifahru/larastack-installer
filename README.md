@@ -3,7 +3,7 @@
 Paket ini menyiapkan stack Laravel production tanpa aaPanel untuk Ubuntu 24.04:
 
 - Nginx dari apt
-- PHP-FPM 8.3 default
+- PHP-FPM 8.3 default, atau PHP 8.4 sebagai default jika dipilih
 - opsi PHP 8.4 jika tersedia dari repository apt yang sudah terkonfigurasi
 - MariaDB
 - Redis
@@ -27,6 +27,7 @@ Paket ini menyiapkan stack Laravel production tanpa aaPanel untuk Ubuntu 24.04:
 - `grant-site-ssh-access.sh`: beri akses SSH key ke pengelola website tanpa sudo.
 - `revoke-site-ssh-access.sh`: cabut akses SSH key pengelola website.
 - `deploy-laravel.sh`: deploy project Laravel existing.
+- `set-laravel-env.sh`: update key/value `.env` dengan backup otomatis.
 - `create-supervisor-laravel-queue.sh`: buat queue worker Laravel via Supervisor.
 - `remove-laravel-site.sh`: hapus site dengan konfirmasi eksplisit untuk data.
 
@@ -68,11 +69,12 @@ Keduanya membuka menu:
 5. Deploy website
 6. Backup website
 7. Restore website
-8. Create/update queue worker
-9. Grant SSH access to manager
-10. Revoke SSH access from manager
-11. Remove website
-12. Install/update global command
+8. Set Laravel .env value
+9. Create/update queue worker
+10. Grant SSH access to manager
+11. Revoke SSH access from manager
+12. Remove website
+13. Install/update global command
 0. Exit
 ```
 
@@ -83,6 +85,7 @@ larastack create-site --domain=example.com --handoff
 larastack list-sites --summary
 larastack check-site --domain=example.com
 larastack backup --domain=example.com
+larastack set-env --domain=example.com --key=APP_DEBUG --value=false --clear-config
 ```
 
 Jika menjalankan `sudo ./install-laravel-server.sh`, command global ini juga dipasang otomatis di akhir instalasi.
@@ -109,6 +112,12 @@ Dengan Fail2ban:
 sudo ./install-laravel-server.sh --yes --with-fail2ban
 ```
 
+Jadikan PHP 8.4 sebagai default website baru:
+
+```bash
+sudo ./install-laravel-server.sh --yes --php=8.4 --with-php84-ppa
+```
+
 Dengan percobaan PHP 8.4 dari apt repository yang sudah tersedia:
 
 ```bash
@@ -126,6 +135,8 @@ Script akan menulis log ke:
 ```bash
 /var/log/laravel-deploy/install.log
 ```
+
+Di akhir instalasi, script menampilkan versi paket, health summary service, dan command berikutnya seperti `larastack`, `larastack create-site`, dan `larastack check-site`.
 
 ## Membuat Website Laravel Baru
 
@@ -469,6 +480,25 @@ sudo ./deploy-laravel.sh \
   --maintenance
 ```
 
+Deploy dengan rollback otomatis Git checkout jika proses gagal:
+
+```bash
+sudo ./deploy-laravel.sh \
+  --domain=example.com \
+  --branch=main \
+  --auto-rollback
+```
+
+Jika deploy gagal tanpa auto rollback, script menampilkan command rollback ke commit sebelumnya:
+
+```bash
+sudo ./deploy-laravel.sh \
+  --domain=example.com \
+  --rollback=COMMIT_SHA
+```
+
+Rollback hanya mengubah Git checkout dan restart service. Migration database tidak di-rollback otomatis.
+
 Skip npm build:
 
 ```bash
@@ -492,6 +522,26 @@ Log deploy disimpan di:
 ```bash
 /var/log/laravel-deploy/deploy-example.com.log
 ```
+
+## Update `.env`
+
+Ubah satu key `.env` dengan backup otomatis:
+
+```bash
+sudo ./set-laravel-env.sh \
+  --domain=example.com \
+  --key=APP_DEBUG \
+  --value=false \
+  --clear-config
+```
+
+Mode interaktif:
+
+```bash
+sudo ./set-laravel-env.sh
+```
+
+Script akan auto-detect path, site user, dan versi PHP dari Nginx/PHP-FPM pool. File `.env` tetap dimiliki site user dan permission diset `0600`.
 
 ## Melihat Website
 

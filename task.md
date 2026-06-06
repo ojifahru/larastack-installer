@@ -94,19 +94,19 @@
 
 ## Prioritas Rendah
 
-- [ ] Buat `set-laravel-env.sh`.
-  - [ ] Set key/value `.env` dengan backup otomatis.
-  - [ ] Jalankan sebagai root tetapi file tetap milik site user.
-  - [ ] Opsi clear/cache config setelah update.
+- [x] Buat `set-laravel-env.sh`.
+  - [x] Set key/value `.env` dengan backup otomatis.
+  - [x] Jalankan sebagai root tetapi file tetap milik site user.
+  - [x] Opsi clear/cache config setelah update.
 
-- [ ] Improve `install-laravel-server.sh`.
-  - [ ] Pilihan PHP default 8.3 atau 8.4.
-  - [ ] Validasi Node.js 24 aktif.
-  - [ ] Tampilkan health summary service setelah install.
-  - [ ] Tampilkan next-step command setelah install selesai.
+- [x] Improve `install-laravel-server.sh`.
+  - [x] Pilihan PHP default 8.3 atau 8.4.
+  - [x] Validasi Node.js 24 aktif.
+  - [x] Tampilkan health summary service setelah install.
+  - [x] Tampilkan next-step command setelah install selesai.
 
-- [ ] Tambahkan rollback deploy.
-  - [ ] Simpan commit sebelum deploy.
-  - [ ] Jika composer/npm/artisan gagal, tampilkan command rollback.
-  - [ ] Opsi rollback otomatis untuk Git checkout.
-  - [ ] Jangan rollback migration otomatis kecuali diminta eksplisit.
+- [x] Tambahkan rollback deploy.
+  - [x] Simpan commit sebelum deploy.
+  - [x] Jika composer/npm/artisan gagal, tampilkan command rollback.
+  - [x] Opsi rollback otomatis untuk Git checkout.
+  - [x] Jangan rollback migration otomatis kecuali diminta eksplisit.

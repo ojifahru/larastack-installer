@@ -12,10 +12,13 @@ NO_OPTIMIZE=false
 SEED=false
 FORCE=false
 MAINTENANCE=false
+AUTO_ROLLBACK=false
+ROLLBACK_COMMIT=""
 INTERACTIVE=false
 LOG_DIR="/var/log/laravel-deploy"
 LOG_FILE=""
 MAINTENANCE_ACTIVE=false
+PREVIOUS_COMMIT=""
 
 if (( $# == 0 )); then
   INTERACTIVE=true
@@ -40,6 +43,8 @@ Options:
   --seed
   --no-seed
   --maintenance
+  --auto-rollback       Checkout the previous Git commit if deploy fails
+  --rollback=COMMIT     Checkout a specific Git commit and restart services only
   --force
   -h, --help
 USAGE
@@ -58,6 +63,8 @@ for arg in "$@"; do
     --seed) SEED=true ;;
     --no-seed) SEED=false ;;
     --maintenance) MAINTENANCE=true ;;
+    --auto-rollback) AUTO_ROLLBACK=true ;;
+    --rollback=*) ROLLBACK_COMMIT="${arg#*=}" ;;
     --force) FORCE=true ;;
     --interactive) INTERACTIVE=true ;;
     -h|--help) usage; exit 0 ;;
@@ -269,7 +276,7 @@ php_bin() {
 }
 
 run_as_site_user() {
-  sudo -H -u "$SITE_USER" bash -lc "$1" bash "$SITE_PATH" "$(php_bin)" "$(command -v composer || true)" "$BRANCH"
+  sudo -H -u "$SITE_USER" bash -lc "$1" bash "$SITE_PATH" "$(php_bin)" "$(command -v composer || true)" "$BRANCH" "$PREVIOUS_COMMIT" "$ROLLBACK_COMMIT"
 }
 
 setup_logging() {
@@ -285,13 +292,31 @@ setup_logging() {
 
 on_error() {
   local line="${1:-$LINENO}"
+  set +e
   if [[ "$MAINTENANCE_ACTIVE" == true ]]; then
     warn "Deploy failed; attempting to disable maintenance mode"
-    set +e
     run_as_site_user 'cd "$1" && "$2" artisan up' >/dev/null 2>&1
-    set -e
     MAINTENANCE_ACTIVE=false
   fi
+
+  if [[ "$AUTO_ROLLBACK" == true && -n "$PREVIOUS_COMMIT" ]]; then
+    warn "Auto rollback enabled; checking out previous commit ${PREVIOUS_COMMIT}"
+    if run_as_site_user 'cd "$1" && git checkout "$5"' >/dev/null 2>&1; then
+      if restart_services >/dev/null 2>&1; then
+        warn "Services restarted after auto rollback checkout."
+      else
+        warn "Service restart after auto rollback failed. Run check-site after reviewing the log."
+      fi
+      warn "Git checkout rolled back to ${PREVIOUS_COMMIT}. Database migrations were not rolled back automatically."
+    else
+      warn "Auto rollback Git checkout failed. Run the rollback command manually after checking the worktree."
+      print_rollback_hint
+    fi
+  else
+    print_rollback_hint
+  fi
+
+  set -e
   error "Deploy failed at line ${line}. See ${LOG_FILE} for details."
 }
 
@@ -348,6 +373,10 @@ INTRO
     MAINTENANCE=true
   fi
 
+  if [[ "$AUTO_ROLLBACK" != true ]] && prompt_yes_no "Aktifkan auto rollback Git checkout jika deploy gagal?" "n"; then
+    AUTO_ROLLBACK=true
+  fi
+
   cat > /dev/tty <<EOF
 
 Ringkasan deploy:
@@ -361,6 +390,7 @@ Ringkasan deploy:
   seed:        ${SEED}
   optimize:    $([[ "$NO_OPTIMIZE" == true ]] && echo "skip" || echo "run")
   maintenance: ${MAINTENANCE}
+  auto rollback: ${AUTO_ROLLBACK}
 
 EOF
 
@@ -378,6 +408,7 @@ validate_input() {
   [[ -n "$SITE_USER" ]] || error "Could not detect site user. Use --site-user=example."
   id "$SITE_USER" >/dev/null 2>&1 || error "Site user does not exist: $SITE_USER"
   [[ "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] || error "--php must look like 8.3"
+  [[ -z "$ROLLBACK_COMMIT" || "$ROLLBACK_COMMIT" =~ ^[A-Za-z0-9._/-]+$ ]] || error "--rollback contains invalid characters"
   php_bin >/dev/null
 
   if [[ "$(stat -c '%U' "$SITE_PATH")" != "$SITE_USER" ]]; then
@@ -403,6 +434,39 @@ ensure_clean_worktree() {
 git_update() {
   info "Pulling latest code from origin/${BRANCH} as ${SITE_USER}"
   run_as_site_user 'cd "$1" && git fetch origin "$4" && git checkout "$4" && git pull --ff-only origin "$4"'
+}
+
+capture_previous_commit() {
+  PREVIOUS_COMMIT="$(run_as_site_user 'cd "$1" && git rev-parse HEAD')"
+  success "Previous Git commit saved: ${PREVIOUS_COMMIT}"
+}
+
+rollback_target_arg() {
+  if [[ -n "$DOMAIN" ]]; then
+    printf -- '--domain=%s' "$DOMAIN"
+  else
+    printf -- '--path=%s' "$SITE_PATH"
+  fi
+}
+
+print_rollback_hint() {
+  [[ -n "$PREVIOUS_COMMIT" ]] || return
+
+  cat <<EOF
+
+Rollback command:
+  sudo larastack deploy $(rollback_target_arg) --rollback=${PREVIOUS_COMMIT}
+
+Note: rollback only changes the Git checkout and restarts services. Database migrations are not rolled back automatically.
+EOF
+}
+
+rollback_to_commit() {
+  local commit="$1"
+
+  info "Checking out rollback commit ${commit} as ${SITE_USER}"
+  run_as_site_user 'cd "$1" && git fetch --all --tags --prune && git checkout "$6"'
+  warn "Git checkout changed to ${commit}. Database migrations were not rolled back automatically."
 }
 
 composer_install() {
@@ -542,9 +606,20 @@ main() {
   setup_logging
   validate_input
 
+  if [[ -n "$ROLLBACK_COMMIT" ]]; then
+    info "Rollback started for ${SITE_PATH}"
+    info "Rollback context: domain=${DOMAIN:-"-"} site_user=${SITE_USER} php=${PHP_VERSION} commit=${ROLLBACK_COMMIT}"
+    rollback_to_commit "$ROLLBACK_COMMIT"
+    set_permissions
+    restart_services
+    success "Rollback checkout complete. Log saved to $LOG_FILE"
+    return
+  fi
+
   info "Deploy started for ${SITE_PATH}"
   info "Deploy context: domain=${DOMAIN:-"-"} site_user=${SITE_USER} php=${PHP_VERSION} branch=${BRANCH}"
 
+  capture_previous_commit
   ensure_clean_worktree
   enable_maintenance
   git_update

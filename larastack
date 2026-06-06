@@ -30,6 +30,7 @@ Commands:
   deploy              Deploy an existing site
   backup              Backup a site
   restore             Restore a site backup
+  set-env             Set Laravel .env key/value
   queue               Create/update Laravel queue worker
   grant-ssh           Grant SSH access to website manager
   revoke-ssh          Revoke SSH access from website manager
@@ -109,11 +110,12 @@ LaraStack Installer
 5. Deploy website
 6. Backup website
 7. Restore website
-8. Create/update queue worker
-9. Grant SSH access to manager
-10. Revoke SSH access from manager
-11. Remove website
-12. Install/update global command
+8. Set Laravel .env value
+9. Create/update queue worker
+10. Grant SSH access to manager
+11. Revoke SSH access from manager
+12. Remove website
+13. Install/update global command
 0. Exit
 
 MENU
@@ -137,11 +139,12 @@ interactive_menu() {
       5) run_menu_command "deploy-laravel.sh" ;;
       6) run_menu_command "backup-laravel-site.sh" ;;
       7) run_menu_command "restore-laravel-site.sh" ;;
-      8) run_menu_command "create-supervisor-laravel-queue.sh" ;;
-      9) run_menu_command "grant-site-ssh-access.sh" ;;
-      10) run_menu_command "revoke-site-ssh-access.sh" ;;
-      11) run_menu_command "remove-laravel-site.sh" ;;
-      12) run_menu_command "install-larastack-command.sh" ;;
+      8) run_menu_command "set-laravel-env.sh" ;;
+      9) run_menu_command "create-supervisor-laravel-queue.sh" ;;
+      10) run_menu_command "grant-site-ssh-access.sh" ;;
+      11) run_menu_command "revoke-site-ssh-access.sh" ;;
+      12) run_menu_command "remove-laravel-site.sh" ;;
+      13) run_menu_command "install-larastack-command.sh" ;;
       0|q|Q|exit) exit 0 ;;
       h|help|-h|--help) usage; pause_if_interactive ;;
       *) warn "Unknown menu choice: $choice"; pause_if_interactive ;;
@@ -164,6 +167,7 @@ main() {
     deploy) run_script "deploy-laravel.sh" "$@" ;;
     backup) run_script "backup-laravel-site.sh" "$@" ;;
     restore) run_script "restore-laravel-site.sh" "$@" ;;
+    set-env|env) run_script "set-laravel-env.sh" "$@" ;;
     queue) run_script "create-supervisor-laravel-queue.sh" "$@" ;;
     grant-ssh) run_script "grant-site-ssh-access.sh" "$@" ;;
     revoke-ssh) run_script "revoke-site-ssh-access.sh" "$@" ;;

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 DEFAULT_TIMEZONE="${DEFAULT_TIMEZONE:-Asia/Jakarta}"
-PHP_DEFAULT_VERSION="8.3"
+PHP_DEFAULT_VERSION="${PHP_DEFAULT_VERSION:-8.3}"
 INSTALL_PHP84=false
 INSTALL_PHP84_PPA=false
 INSTALL_FAIL2BAN=false
@@ -23,6 +23,7 @@ Options:
   --interactive           Ask installation questions
   --yes                   Run with defaults and supplied options without questions
   --timezone=Asia/Jakarta  Set server timezone. Default: Asia/Jakarta
+  --php=8.3                Set default PHP-FPM version: 8.3 or 8.4. Default: 8.3
   --with-php84             Install PHP 8.4 if it is available from configured apt repositories
   --with-php84-ppa         Add ppa:ondrej/php if PHP 8.4 is not available
   --with-fail2ban          Install and enable Fail2ban
@@ -33,6 +34,7 @@ USAGE
 for arg in "$@"; do
   case "$arg" in
     --timezone=*) DEFAULT_TIMEZONE="${arg#*=}" ;;
+    --php=*) PHP_DEFAULT_VERSION="${arg#*=}" ;;
     --with-php84) INSTALL_PHP84=true ;;
     --with-php84-ppa) INSTALL_PHP84=true; INSTALL_PHP84_PPA=true ;;
     --with-fail2ban) INSTALL_FAIL2BAN=true ;;
@@ -155,6 +157,11 @@ Press Enter to accept the value in brackets.
 INTRO
 
   DEFAULT_TIMEZONE="$(prompt_text "Timezone server" "$DEFAULT_TIMEZONE")"
+  PHP_DEFAULT_VERSION="$(prompt_text "Versi PHP default untuk website baru, pilih 8.3 atau 8.4" "$PHP_DEFAULT_VERSION")"
+
+  if [[ "$PHP_DEFAULT_VERSION" == "8.4" ]]; then
+    INSTALL_PHP84=true
+  fi
 
   if [[ "$INSTALL_PHP84" != true ]] && prompt_yes_no "Install PHP 8.4 juga jika tersedia dari apt repository?" "n"; then
     INSTALL_PHP84=true
@@ -184,6 +191,14 @@ EOF
 
   if ! prompt_yes_no "Lanjut install stack production Laravel sekarang?" "y"; then
     error "Installation cancelled"
+  fi
+}
+
+validate_options() {
+  [[ "$PHP_DEFAULT_VERSION" =~ ^8\.[34]$ ]] || error "--php must be 8.3 or 8.4"
+
+  if [[ "$PHP_DEFAULT_VERSION" == "8.4" ]]; then
+    INSTALL_PHP84=true
   fi
 }
 
@@ -288,8 +303,33 @@ add_ondrej_php_ppa() {
   apt-get update
 }
 
+ensure_default_php_available() {
+  local package="php${PHP_DEFAULT_VERSION}-fpm"
+
+  info "Checking default PHP package availability: ${package}"
+  if apt-cache show "$package" >/dev/null 2>&1; then
+    return
+  fi
+
+  if [[ "$PHP_DEFAULT_VERSION" == "8.4" && "$INSTALL_PHP84_PPA" == true ]]; then
+    add_ondrej_php_ppa
+  fi
+
+  if ! apt-cache show "$package" >/dev/null 2>&1; then
+    if [[ "$PHP_DEFAULT_VERSION" == "8.4" ]]; then
+      error "PHP 8.4 is not available. Re-run with --php=8.4 --with-php84-ppa to allow ppa:ondrej/php."
+    fi
+    error "Default PHP package is not available: ${package}"
+  fi
+}
+
 install_optional_php84() {
   if [[ "$INSTALL_PHP84" != true ]]; then
+    return
+  fi
+
+  if [[ "$PHP_DEFAULT_VERSION" == "8.4" ]]; then
+    success "PHP 8.4 is already installed as the default PHP version"
     return
   fi
 
@@ -447,6 +487,19 @@ NODESOURCE
   success "Node.js installed: $(node -v)"
 }
 
+validate_nodejs_24() {
+  local current_major npm_version
+
+  command -v node >/dev/null 2>&1 || error "Node.js binary not found after install"
+  command -v npm >/dev/null 2>&1 || error "npm binary not found after install"
+
+  current_major="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || true)"
+  [[ "$current_major" == "24" ]] || error "Expected active Node.js 24, got $(node -v 2>/dev/null || echo unknown)"
+
+  npm_version="$(npm -v 2>/dev/null || true)"
+  success "Node.js 24 active: node $(node -v), npm ${npm_version}"
+}
+
 install_certbot() {
   info "Installing Certbot and Nginx plugin"
   apt_install certbot python3-certbot-nginx
@@ -505,6 +558,42 @@ enable_services() {
   fi
 }
 
+service_health_line() {
+  local service="$1"
+  local status
+
+  status="$(systemctl is-active "$service" 2>/dev/null || true)"
+  if [[ "$status" == "active" ]]; then
+    printf '  %-24s active\n' "$service"
+  else
+    printf '  %-24s %s\n' "$service" "${status:-unknown}"
+  fi
+}
+
+print_health_summary() {
+  cat <<'HEADER'
+
+Service health:
+HEADER
+  service_health_line nginx
+  service_health_line "php${PHP_DEFAULT_VERSION}-fpm"
+  if [[ "$PHP_DEFAULT_VERSION" != "8.4" ]] && systemctl list-unit-files php8.4-fpm.service --no-pager --no-legend 2>/dev/null | grep -q '^php8.4-fpm.service'; then
+    service_health_line php8.4-fpm
+  fi
+  service_health_line mariadb
+  service_health_line redis-server
+  service_health_line supervisor
+  if systemctl list-unit-files fail2ban.service --no-pager --no-legend 2>/dev/null | grep -q '^fail2ban.service'; then
+    service_health_line fail2ban
+  fi
+
+  if nginx -t >/dev/null 2>&1; then
+    printf '  %-24s ok\n' "nginx config"
+  else
+    printf '  %-24s check failed\n' "nginx config"
+  fi
+}
+
 print_versions() {
   cat <<'HEADER'
 
@@ -520,6 +609,17 @@ HEADER
   npm -v || true
   mysql --version || true
   redis-server --version || true
+}
+
+print_next_steps() {
+  cat <<EOF
+
+Next steps:
+  1. Open the menu: larastack
+  2. Create an empty handoff site: sudo larastack create-site --domain=example.com --site-user=example --handoff
+  3. List sites: sudo larastack list-sites --summary
+  4. Check health: sudo larastack check-site --all
+EOF
 }
 
 install_larastack_command() {
@@ -542,10 +642,12 @@ main() {
     run_interactive_wizard
   fi
 
+  validate_options
   check_os
   set_timezone
   install_base_packages
   install_nginx
+  ensure_default_php_available
   install_php_packages "$PHP_DEFAULT_VERSION"
   configure_php "$PHP_DEFAULT_VERSION"
   check_laravel_extensions "$PHP_DEFAULT_VERSION"
@@ -553,12 +655,15 @@ main() {
   install_mariadb_redis_supervisor
   install_composer
   install_nodejs_24
+  validate_nodejs_24
   install_certbot
   create_directories
   configure_ufw
   enable_services
   print_versions
+  print_health_summary
   install_larastack_command
+  print_next_steps
   success "Installation complete. Log saved to $LOG_FILE"
 }
 
