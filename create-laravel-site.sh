@@ -20,6 +20,7 @@ SKIP_KEYGEN=false
 KEY_NAME="id_ed25519"
 NO_INSTALL_DEPS=false
 MIGRATE=false
+SEED=false
 INTERACTIVE=false
 DEPLOY_KEY_CONFIRMED=false
 
@@ -53,6 +54,7 @@ Options:
   --with-queue
   --no-install-deps
   --migrate
+  --seed
   -h, --help
 USAGE
 }
@@ -77,6 +79,7 @@ for arg in "$@"; do
     --with-queue) WITH_QUEUE=true ;;
     --no-install-deps) NO_INSTALL_DEPS=true ;;
     --migrate) MIGRATE=true ;;
+    --seed) MIGRATE=true; SEED=true ;;
     --interactive) INTERACTIVE=true ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; usage; exit 1 ;;
@@ -510,6 +513,10 @@ EOF
     MIGRATE=true
   fi
 
+  if [[ "$MIGRATE" == true && "$SEED" != true ]] && prompt_yes_no "Jalankan database seeder setelah migrate?" "n"; then
+    SEED=true
+  fi
+
   cat > /dev/tty <<EOF
 
 Ringkasan site:
@@ -525,6 +532,7 @@ Ringkasan site:
   db user:          ${DB_USER:-"-"}
   install deps:     $([[ "$NO_INSTALL_DEPS" == true ]] && echo "false" || echo "true")
   migrate:          ${MIGRATE}
+  seed:             ${SEED}
   SSL:              ${WITH_SSL}
   queue:            ${WITH_QUEUE}
 
@@ -672,8 +680,11 @@ create_database() {
   mysql <<SQL
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${escaped_pass}';
+CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${escaped_pass}';
 ALTER USER '${DB_USER}'@'localhost' IDENTIFIED BY '${escaped_pass}';
+ALTER USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${escaped_pass}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
+GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
 
@@ -690,6 +701,85 @@ EOF
   else
     success "Database credentials updated in $credential_file"
   fi
+}
+
+env_value() {
+  local value="$1"
+
+  if [[ "$value" =~ ^[A-Za-z0-9_./:@+-]*$ ]]; then
+    printf '%s' "$value"
+    return
+  fi
+
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "$value"
+}
+
+set_env_key() {
+  local env_file="$1"
+  local key="$2"
+  local value="$3"
+  local tmp
+  tmp="$(mktemp)"
+
+  awk -v key="$key" -v value="$value" '
+    $0 ~ "^[[:space:]]*" key "=" {
+      print key "=" value
+      found=1
+      next
+    }
+    { print }
+    END {
+      if (!found) {
+        print key "=" value
+      }
+    }
+  ' "$env_file" > "$tmp"
+
+  install -m 0644 "$tmp" "$env_file"
+  rm -f "$tmp"
+  chown "$SITE_USER:$SITE_USER" "$env_file"
+}
+
+configure_laravel_env_database() {
+  if [[ -z "$DB_NAME" ]]; then
+    return
+  fi
+
+  local env_file="${SITE_PATH}/.env"
+  [[ -f "$env_file" ]] || return
+
+  info "Updating Laravel .env database settings"
+
+  set_env_key "$env_file" "DB_CONNECTION" "$(env_value "mysql")"
+  set_env_key "$env_file" "DB_HOST" "$(env_value "127.0.0.1")"
+  set_env_key "$env_file" "DB_PORT" "$(env_value "3306")"
+  set_env_key "$env_file" "DB_DATABASE" "$(env_value "$DB_NAME")"
+  set_env_key "$env_file" "DB_USERNAME" "$(env_value "$DB_USER")"
+  set_env_key "$env_file" "DB_PASSWORD" "$(env_value "$DB_PASS")"
+}
+
+configure_laravel_env_app_url() {
+  local env_file="${SITE_PATH}/.env"
+  local scheme="http"
+  [[ -f "$env_file" ]] || return
+
+  if [[ "$WITH_SSL" == true ]]; then
+    scheme="https"
+  fi
+
+  info "Updating Laravel APP_URL"
+  set_env_key "$env_file" "APP_URL" "$(env_value "${scheme}://${DOMAIN}")"
+}
+
+configure_laravel_env() {
+  local env_file="${SITE_PATH}/.env"
+  [[ -f "$env_file" ]] || return
+
+  backup_file "$env_file"
+  configure_laravel_env_database
+  configure_laravel_env_app_url
 }
 
 install_laravel_dependencies() {
@@ -731,6 +821,8 @@ install_laravel_dependencies() {
     sudo -H -u "$SITE_USER" bash -lc 'cd "$1" && cp .env.example .env' bash "$SITE_PATH"
   fi
 
+  configure_laravel_env
+
   if [[ -f "${SITE_PATH}/artisan" && -f "${SITE_PATH}/.env" ]]; then
     if ! grep -Eq '^APP_KEY=.+$' "${SITE_PATH}/.env"; then
       info "Generating Laravel APP_KEY"
@@ -743,14 +835,16 @@ install_laravel_dependencies() {
     fi
 
     if [[ "$MIGRATE" == true ]]; then
-      info "Running Laravel migrations"
-      sudo -H -u "$SITE_USER" bash -lc 'cd "$1" && "$2" artisan migrate --force' bash "$SITE_PATH" "$php_bin"
+      if [[ "$SEED" == true ]]; then
+        info "Running Laravel migrations with seed"
+        sudo -H -u "$SITE_USER" bash -lc 'cd "$1" && "$2" artisan migrate --force --seed' bash "$SITE_PATH" "$php_bin"
+      else
+        info "Running Laravel migrations"
+        sudo -H -u "$SITE_USER" bash -lc 'cd "$1" && "$2" artisan migrate --force' bash "$SITE_PATH" "$php_bin"
+      fi
     fi
   fi
-
-  if [[ -n "$DB_NAME" ]]; then
-    warn "Database credentials were created at /root/laravel-deploy/credentials/${DOMAIN}.db.env. Update ${SITE_PATH}/.env as needed."
-  fi
+  [[ -n "$DB_NAME" ]] && success "Database credentials stored at /root/laravel-deploy/credentials/${DOMAIN}.db.env"
 }
 
 create_nginx_site() {

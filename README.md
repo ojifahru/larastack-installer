@@ -93,6 +93,7 @@ Script akan menanyakan:
 - database MariaDB
 - SSL Let's Encrypt
 - Supervisor queue worker
+- migrate dan database seeder
 
 Mode argumen tetap tersedia untuk automation atau deploy berulang.
 
@@ -120,6 +121,17 @@ sudo ./create-laravel-site.sh \
   --domain=example.com \
   --site-user=example \
   --repo=https://github.com/user/repo.git
+```
+
+Dengan migrate dan seeder:
+
+```bash
+sudo ./create-laravel-site.sh \
+  --domain=example.com \
+  --site-user=example \
+  --repo=https://github.com/user/repo.git \
+  --migrate \
+  --seed
 ```
 
 Dengan private repository:
@@ -152,6 +164,7 @@ Setiap site dibuat dengan:
 - PHP-FPM pool sendiri, contoh `/etc/php/8.3/fpm/pool.d/example.conf`
 - socket sendiri, contoh `/run/php/php8.3-fpm-example.sock`
 - owner project `example:example`
+- `.env` otomatis diisi `APP_URL`, `DB_CONNECTION`, `DB_HOST`, `DB_DATABASE`, `DB_USERNAME`, dan `DB_PASSWORD` jika file `.env` ada atau dibuat dari `.env.example`
 
 ### Public Repo
 
