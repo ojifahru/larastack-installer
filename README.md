@@ -255,6 +255,40 @@ Setiap site dibuat dengan:
 - owner project `example:example`
 - `.env` otomatis diisi `APP_URL`, `DB_CONNECTION`, `DB_HOST`, `DB_DATABASE`, `DB_USERNAME`, dan `DB_PASSWORD` jika file `.env` ada atau dibuat dari `.env.example`
 
+### Lokasi File Konfigurasi Site
+
+Untuk mengingat letak konfigurasi yang dibuat installer:
+
+```bash
+/etc/nginx/sites-available/{domain}
+/etc/nginx/sites-enabled/{domain}
+/etc/php/{php_version}/fpm/pool.d/{site_user}.conf
+/run/php/php{php_version}-fpm-{site_user}.sock
+/etc/supervisor/conf.d/{domain}-queue.conf
+/var/log/supervisor/{domain}/queue.log
+/home/{site_user}/public_html
+/home/{site_user}/public_html/public
+/home/{site_user}/site-info.env
+/root/laravel-deploy/credentials/{domain}.db.env
+/root/backups/laravel/{domain}/
+```
+
+Contoh untuk domain `example.com`, site user `example`, dan PHP `8.3`:
+
+```bash
+/etc/nginx/sites-available/example.com
+/etc/nginx/sites-enabled/example.com
+/etc/php/8.3/fpm/pool.d/example.conf
+/run/php/php8.3-fpm-example.sock
+/etc/supervisor/conf.d/example.com-queue.conf
+/var/log/supervisor/example.com/queue.log
+/home/example/public_html
+/home/example/public_html/public
+/home/example/site-info.env
+/root/laravel-deploy/credentials/example.com.db.env
+/root/backups/laravel/example.com/
+```
+
 ### Mode Handoff Website Kosong
 
 Mode `--handoff` atau `--empty-site` dipakai saat admin hanya menyiapkan slot hosting, lalu pengelola website yang mengisi aplikasi.
@@ -545,16 +579,24 @@ Script akan auto-detect path, site user, dan versi PHP dari Nginx/PHP-FPM pool. 
 
 ## Melihat Website
 
-Lihat semua website beserta detailnya:
+Lihat semua website dalam bentuk tabel:
 
 ```bash
 sudo ./list-laravel-sites.sh
 ```
 
-Tampilan ringkas:
+Tampilan tabel menampilkan domain, status Nginx, SSL, versi PHP, status PHP-FPM, site user, queue, database, disk usage, dan project path.
+
+Tampilan tabel eksplisit:
 
 ```bash
 sudo ./list-laravel-sites.sh --summary
+```
+
+Tampilan detail per website:
+
+```bash
+sudo ./list-laravel-sites.sh --details
 ```
 
 Filter satu domain:

@@ -3,6 +3,7 @@ set -euo pipefail
 
 DOMAIN_FILTER=""
 SUMMARY=false
+DETAILS=false
 JSON=false
 JSON_FIRST=true
 
@@ -12,7 +13,8 @@ Usage:
   sudo bash list-laravel-sites.sh [options]
 
 Options:
-  --summary              Show compact one-line summary per site
+  --summary              Show compact table per site (default)
+  --details              Show detailed block per site
   --json                 Show machine-readable JSON array
   --domain=example.com   Show only one domain
   -h, --help             Show this help
@@ -22,6 +24,7 @@ USAGE
 for arg in "$@"; do
   case "$arg" in
     --summary) SUMMARY=true ;;
+    --details) DETAILS=true ;;
     --json) JSON=true ;;
     --domain=*) DOMAIN_FILTER="${arg#*=}" ;;
     -h|--help) usage; exit 0 ;;
@@ -50,6 +53,18 @@ nginx_directive() {
 normalize_dash() {
   local value="${1:-}"
   [[ -n "$value" ]] && printf '%s' "$value" || printf '%s' "-"
+}
+
+truncate_value() {
+  local value="${1:-}"
+  local max="${2:-20}"
+
+  [[ -n "$value" ]] || value="-"
+  if (( ${#value} > max )); then
+    printf '%s' "${value:0:max-1}~"
+  else
+    printf '%s' "$value"
+  fi
 }
 
 json_escape() {
@@ -225,7 +240,35 @@ disk_usage() {
 }
 
 print_summary_header() {
-  printf '%-30s %-8s %-14s %-8s %-28s %-9s %-10s %s\n' "DOMAIN" "ENABLED" "SITE_USER" "PHP" "PROJECT" "SSL" "QUEUE" "REPO"
+  printf '%-26s %-5s %-3s %-5s %-8s %-12s %-10s %-16s %-7s %-28s\n' \
+    "DOMAIN" "NGINX" "SSL" "PHP" "FPM" "SITE_USER" "QUEUE" "DATABASE" "DISK" "PROJECT"
+  printf '%-26s %-5s %-3s %-5s %-8s %-12s %-10s %-16s %-7s %-28s\n' \
+    "--------------------------" "-----" "---" "-----" "--------" "------------" "----------" "----------------" "-------" "----------------------------"
+}
+
+print_summary_row() {
+  local domain="$1"
+  local enabled="$2"
+  local ssl="$3"
+  local php_version="$4"
+  local php_service_status="$5"
+  local site_user="$6"
+  local queue="$7"
+  local db_name="$8"
+  local disk="$9"
+  local project_path="${10}"
+
+  printf '%-26s %-5s %-3s %-5s %-8s %-12s %-10s %-16s %-7s %-28s\n' \
+    "$(truncate_value "$domain" 26)" \
+    "$(truncate_value "$enabled" 5)" \
+    "$(truncate_value "$ssl" 3)" \
+    "$(truncate_value "$php_version" 5)" \
+    "$(truncate_value "$php_service_status" 8)" \
+    "$(truncate_value "$site_user" 12)" \
+    "$(truncate_value "$queue" 10)" \
+    "$(truncate_value "$db_name" 16)" \
+    "$(truncate_value "$disk" 7)" \
+    "$(truncate_value "$project_path" 28)"
 }
 
 print_site() {
@@ -341,16 +384,18 @@ EOF
     return
   fi
 
-  if [[ "$SUMMARY" == true ]]; then
-    printf '%-30s %-8s %-14s %-8s %-28s %-9s %-10s %s\n' \
+  if [[ "$DETAILS" != true ]]; then
+    print_summary_row \
       "$domain" \
       "$enabled" \
-      "$(normalize_dash "$site_user")" \
-      "$(normalize_dash "$php_version")" \
-      "$(normalize_dash "$project_path")" \
       "$ssl" \
+      "$(normalize_dash "$php_version")" \
+      "$(normalize_dash "$php_service_status")" \
+      "$(normalize_dash "$site_user")" \
       "$(normalize_dash "$queue")" \
-      "$(normalize_dash "$repo")"
+      "$(normalize_dash "$db_name")" \
+      "$(normalize_dash "$disk")" \
+      "$(normalize_dash "$project_path")"
     return
   fi
 
@@ -397,8 +442,12 @@ main() {
   local files=()
   local file
 
-  if [[ "$SUMMARY" == true && "$JSON" == true ]]; then
-    error "Use either --summary or --json, not both"
+  if [[ "$SUMMARY" == true && "$DETAILS" == true ]]; then
+    error "Use either --summary or --details, not both"
+  fi
+
+  if [[ "$JSON" == true && ( "$SUMMARY" == true || "$DETAILS" == true ) ]]; then
+    error "Use --json without --summary or --details"
   fi
 
   if [[ ! -d /etc/nginx/sites-available ]]; then
@@ -422,7 +471,7 @@ main() {
     printf '[\n'
   fi
 
-  if [[ "$SUMMARY" == true ]]; then
+  if [[ "$JSON" != true && "$DETAILS" != true ]]; then
     print_summary_header
   fi
 
