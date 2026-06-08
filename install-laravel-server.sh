@@ -4,7 +4,7 @@ set -euo pipefail
 DEFAULT_TIMEZONE="${DEFAULT_TIMEZONE:-Asia/Jakarta}"
 PHP_DEFAULT_VERSION="${PHP_DEFAULT_VERSION:-8.3}"
 INSTALL_PHP84=false
-INSTALL_PHP84_PPA=false
+INSTALL_PHP_PPA=false
 INSTALL_FAIL2BAN=false
 INTERACTIVE=false
 ASSUME_YES=false
@@ -23,9 +23,10 @@ Options:
   --interactive           Ask installation questions
   --yes                   Run with defaults and supplied options without questions
   --timezone=Asia/Jakarta  Set server timezone. Default: Asia/Jakarta
-  --php=8.3                Set default PHP-FPM version: 8.3 or 8.4. Default: 8.3
+  --php=8.3                Set default PHP-FPM version. Supports 5.6, 7.0-7.4, and 8.x. Default: 8.3
   --with-php84             Install PHP 8.4 if it is available from configured apt repositories
-  --with-php84-ppa         Add ppa:ondrej/php if PHP 8.4 is not available
+  --with-php-ppa           Allow adding ppa:ondrej/php when selected PHP packages are not available
+  --with-php84-ppa         Compatibility alias for --with-php84 --with-php-ppa
   --with-fail2ban          Install and enable Fail2ban
   -h, --help               Show this help
 USAGE
@@ -36,7 +37,8 @@ for arg in "$@"; do
     --timezone=*) DEFAULT_TIMEZONE="${arg#*=}" ;;
     --php=*) PHP_DEFAULT_VERSION="${arg#*=}" ;;
     --with-php84) INSTALL_PHP84=true ;;
-    --with-php84-ppa) INSTALL_PHP84=true; INSTALL_PHP84_PPA=true ;;
+    --with-php-ppa) INSTALL_PHP_PPA=true ;;
+    --with-php84-ppa) INSTALL_PHP84=true; INSTALL_PHP_PPA=true ;;
     --with-fail2ban) INSTALL_FAIL2BAN=true ;;
     --interactive) INTERACTIVE=true ;;
     --yes) ASSUME_YES=true; INTERACTIVE=false ;;
@@ -147,6 +149,28 @@ prompt_yes_no() {
   done
 }
 
+php_version_supported_by_installer() {
+  local version="$1"
+
+  case "$version" in
+    5.6|7.[0-4]|8.[0-9]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+php_version_lt() {
+  local version="$1"
+  local target_major="$2"
+  local target_minor="$3"
+  local major minor
+
+  IFS=. read -r major minor <<<"$version"
+  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+
+  (( major < target_major )) && return 0
+  (( major == target_major && minor < target_minor ))
+}
+
 run_interactive_wizard() {
   is_tty || error "Interactive mode needs a terminal. Use --yes and options for non-interactive use."
 
@@ -157,7 +181,7 @@ Press Enter to accept the value in brackets.
 INTRO
 
   DEFAULT_TIMEZONE="$(prompt_text "Timezone server" "$DEFAULT_TIMEZONE")"
-  PHP_DEFAULT_VERSION="$(prompt_text "Versi PHP default untuk website baru, pilih 8.3 atau 8.4" "$PHP_DEFAULT_VERSION")"
+  PHP_DEFAULT_VERSION="$(prompt_text "Versi PHP default untuk website baru, contoh 8.3, 8.4, 7.4, atau 5.6" "$PHP_DEFAULT_VERSION")"
 
   if [[ "$PHP_DEFAULT_VERSION" == "8.4" ]]; then
     INSTALL_PHP84=true
@@ -167,9 +191,13 @@ INTRO
     INSTALL_PHP84=true
   fi
 
-  if [[ "$INSTALL_PHP84" == true && "$INSTALL_PHP84_PPA" != true ]] \
+  if [[ "$PHP_DEFAULT_VERSION" != "8.3" ]]; then
+    INSTALL_PHP_PPA=true
+  fi
+
+  if [[ "$INSTALL_PHP84" == true && "$INSTALL_PHP_PPA" != true ]] \
     && prompt_yes_no "Jika PHP 8.4 tidak ada di repo Ubuntu, tambah PPA ppa:ondrej/php?" "n"; then
-    INSTALL_PHP84_PPA=true
+    INSTALL_PHP_PPA=true
   fi
 
   if [[ "$INSTALL_FAIL2BAN" != true ]] && prompt_yes_no "Install dan aktifkan Fail2ban?" "y"; then
@@ -183,7 +211,7 @@ Ringkasan install:
   timezone:      ${DEFAULT_TIMEZONE}
   PHP default:   ${PHP_DEFAULT_VERSION}
   PHP 8.4:       ${INSTALL_PHP84}
-  PHP 8.4 PPA:   ${INSTALL_PHP84_PPA}
+  PHP PPA:       ${INSTALL_PHP_PPA}
   Fail2ban:      ${INSTALL_FAIL2BAN}
   log:           ${LOG_FILE}
 
@@ -195,10 +223,19 @@ EOF
 }
 
 validate_options() {
-  [[ "$PHP_DEFAULT_VERSION" =~ ^8\.[34]$ ]] || error "--php must be 8.3 or 8.4"
+  [[ "$PHP_DEFAULT_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] || error "--php must look like 8.3"
+  php_version_supported_by_installer "$PHP_DEFAULT_VERSION" || error "--php supports 5.6, 7.0-7.4, and 8.x"
 
   if [[ "$PHP_DEFAULT_VERSION" == "8.4" ]]; then
     INSTALL_PHP84=true
+  fi
+
+  if [[ "$PHP_DEFAULT_VERSION" != "8.3" ]]; then
+    INSTALL_PHP_PPA=true
+  fi
+
+  if php_version_lt "$PHP_DEFAULT_VERSION" 8 2; then
+    warn "PHP ${PHP_DEFAULT_VERSION} is a legacy/EOL branch. Use it only for applications that cannot run on supported PHP yet."
   fi
 }
 
@@ -278,7 +315,7 @@ install_php_packages() {
   )
 
   info "Installing PHP ${version} packages"
-  if [[ "$version" == "$PHP_DEFAULT_VERSION" ]]; then
+  if [[ "$version" == "$PHP_DEFAULT_VERSION" && "$version" == "8.3" ]]; then
     apt_install php-fpm php-cli php-common
   fi
   apt_install "${packages[@]}"
@@ -303,24 +340,26 @@ add_ondrej_php_ppa() {
   apt-get update
 }
 
-ensure_default_php_available() {
-  local package="php${PHP_DEFAULT_VERSION}-fpm"
+ensure_php_version_available() {
+  local version="$1"
+  local package="php${version}-fpm"
 
-  info "Checking default PHP package availability: ${package}"
+  info "Checking PHP package availability: ${package}"
   if apt-cache show "$package" >/dev/null 2>&1; then
     return
   fi
 
-  if [[ "$PHP_DEFAULT_VERSION" == "8.4" && "$INSTALL_PHP84_PPA" == true ]]; then
+  if [[ "$INSTALL_PHP_PPA" == true || "$version" != "8.3" ]]; then
     add_ondrej_php_ppa
   fi
 
   if ! apt-cache show "$package" >/dev/null 2>&1; then
-    if [[ "$PHP_DEFAULT_VERSION" == "8.4" ]]; then
-      error "PHP 8.4 is not available. Re-run with --php=8.4 --with-php84-ppa to allow ppa:ondrej/php."
-    fi
-    error "Default PHP package is not available: ${package}"
+    error "PHP package is not available: ${package}. Check whether ppa:ondrej/php supports PHP ${version} for this Ubuntu release."
   fi
+}
+
+ensure_default_php_available() {
+  ensure_php_version_available "$PHP_DEFAULT_VERSION"
 }
 
 install_optional_php84() {
@@ -335,18 +374,7 @@ install_optional_php84() {
 
   info "Checking PHP 8.4 availability from configured apt repositories"
   apt-get update
-  if ! apt-cache show php8.4-fpm >/dev/null 2>&1; then
-    if [[ "$INSTALL_PHP84_PPA" == true ]]; then
-      add_ondrej_php_ppa
-    else
-      warn "PHP 8.4 is not available from configured apt repositories. Re-run with --with-php84-ppa to add ppa:ondrej/php."
-      return
-    fi
-  fi
-
-  if ! apt-cache show php8.4-fpm >/dev/null 2>&1; then
-    error "PHP 8.4 is still not available after apt repository update"
-  fi
+  ensure_php_version_available "8.4"
 
   install_php_packages "8.4"
   configure_php "8.4"
@@ -355,9 +383,31 @@ install_optional_php84() {
   success "PHP 8.4 installed"
 }
 
+set_default_php_cli() {
+  local version="$1"
+  local php_bin="/usr/bin/php${version}"
+
+  [[ -x "$php_bin" ]] || {
+    warn "PHP CLI binary not found for alternatives: $php_bin"
+    return
+  }
+
+  if ! command -v update-alternatives >/dev/null 2>&1; then
+    warn "update-alternatives not found; skipping PHP CLI default selection"
+    return
+  fi
+
+  if update-alternatives --set php "$php_bin" >/dev/null 2>&1; then
+    success "Default PHP CLI set to PHP ${version}"
+  else
+    warn "Could not set default PHP CLI to ${php_bin}; continuing with versioned php${version} commands"
+  fi
+}
+
 configure_php() {
   local version="$1"
   local php_dir="/etc/php/${version}"
+  local opcache_jit=""
 
   if [[ ! -d "$php_dir" ]]; then
     warn "$php_dir not found; skipping PHP ${version} configuration"
@@ -379,7 +429,11 @@ PHPINI
   done
 
   if [[ -d "${php_dir}/fpm/conf.d" ]]; then
-    write_file_if_changed "${php_dir}/fpm/conf.d/98-laravel-opcache.ini" 0644 <<'OPCACHE'
+    if ! php_version_lt "$version" 8 0; then
+      opcache_jit="opcache.jit=0"
+    fi
+
+    write_file_if_changed "${php_dir}/fpm/conf.d/98-laravel-opcache.ini" 0644 <<OPCACHE
 opcache.enable=1
 opcache.enable_cli=0
 opcache.memory_consumption=128
@@ -388,7 +442,7 @@ opcache.max_accelerated_files=20000
 opcache.validate_timestamps=0
 opcache.revalidate_freq=0
 opcache.save_comments=1
-opcache.jit=0
+${opcache_jit}
 OPCACHE
   fi
 }
@@ -428,12 +482,17 @@ install_mariadb_redis_supervisor() {
 
 install_composer() {
   if command -v composer >/dev/null 2>&1; then
-    success "Composer already installed: $(composer -V)"
-    return
+    local composer_version
+    if composer_version="$(composer -V 2>/dev/null)"; then
+      success "Composer already installed: ${composer_version}"
+      return
+    fi
+    warn "Existing Composer could not run with the active PHP CLI; reinstalling Composer"
   fi
 
   info "Installing Composer with installer checksum verification"
   local tmp_dir expected_checksum actual_checksum installer php_bin
+  local composer_args=("--install-dir=/usr/local/bin" "--filename=composer")
   tmp_dir="$(mktemp -d)"
   installer="${tmp_dir}/composer-setup.php"
   php_bin="$(command -v "php${PHP_DEFAULT_VERSION}" || command -v php)"
@@ -447,8 +506,14 @@ install_composer() {
     error "Composer installer checksum mismatch"
   fi
 
-  "$php_bin" "$installer" --install-dir=/usr/local/bin --filename=composer
+  if php_version_lt "$PHP_DEFAULT_VERSION" 7 2; then
+    warn "PHP ${PHP_DEFAULT_VERSION} requires Composer 2.2 LTS"
+    composer_args+=("--2.2")
+  fi
+
+  "$php_bin" "$installer" "${composer_args[@]}"
   rm -rf "$tmp_dir"
+  hash -r
   success "Composer installed: $(composer -V)"
 }
 
@@ -601,6 +666,9 @@ Installed versions:
 HEADER
   nginx -v 2>&1 || true
   php -v | head -n 1 || true
+  if command -v "php${PHP_DEFAULT_VERSION}" >/dev/null 2>&1; then
+    "php${PHP_DEFAULT_VERSION}" -v | head -n 1 || true
+  fi
   if command -v php8.4 >/dev/null 2>&1; then
     php8.4 -v | head -n 1 || true
   fi
@@ -652,6 +720,7 @@ main() {
   configure_php "$PHP_DEFAULT_VERSION"
   check_laravel_extensions "$PHP_DEFAULT_VERSION"
   install_optional_php84
+  set_default_php_cli "$PHP_DEFAULT_VERSION"
   install_mariadb_redis_supervisor
   install_composer
   install_nodejs_24
